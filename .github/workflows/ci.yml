@@ -16,7 +16,10 @@ jobs:
       # Chrome for Testing: branded Chrome ignores --load-extension since 137.
       - uses: browser-actions/setup-chrome@v1
         id: chrome
-      - run: sudo apt-get install -y xvfb
+      # Ubuntu 24.04 forbids the unprivileged user namespaces Chrome's sandbox needs.
+      - run: |
+          sudo apt-get install -y xvfb
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: sh scripts/test-e2e.sh
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
