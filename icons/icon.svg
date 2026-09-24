@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>Synced Pins</title>
+  <!-- 96x96 artwork inside 16px transparent padding (Chrome Web Store icon guideline).
+       Back window: the part of a 78x78 card left visible around the front card's 6px moat. -->
+  <path fill="#E0512A" d="M28 16H82A12 12 0 0 1 94 28H46A18 18 0 0 0 28 46V94A12 12 0 0 1 16 82V28A12 12 0 0 1 28 16Z"/>
+  <rect fill="#E0512A" x="34" y="34" width="78" height="78" rx="12"/>
+  <!-- Pushpin drawn upright around the front card's centre, then tilted 45 degrees. -->
+  <g fill="#fff" transform="translate(73 73) rotate(45)">
+    <rect x="-15" y="-26" width="30" height="12" rx="4"/>
+    <path d="M-8 -15H8L6 -3H-6Z"/>
+    <rect x="-13" y="-4" width="26" height="6" rx="3"/>
+    <path d="M-2.1 1H2.1V29L0 35L-2.1 29Z"/>
+  </g>
+</svg>

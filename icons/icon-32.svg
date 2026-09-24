@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>Synced Pins</title>
+  <!-- Toolbar size, full bleed. Pin edges are 45-degree lines through pixel corners. -->
+  <path fill="#E0512A" d="M4 0H22A4 4 0 0 1 26 4H10A6 6 0 0 0 4 10V26A4 4 0 0 1 0 22V4A4 4 0 0 1 4 0Z"/>
+  <rect fill="#E0512A" x="6" y="6" width="26" height="26" rx="4"/>
+  <path fill="#fff" d="M22 10L28 16V17L26 19L24 17L21.5 19.5L23 21L21.5 22.5L19 20L12.5 26.5L10.5 27.5L11.5 25.5L18 19L15.5 16.5L17 15L18.5 16.5L21 14L19 12L21 10Z"/>
+</svg>

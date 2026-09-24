@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Chrome for Testing: branded Chrome ignores --load-extension since 137.
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - run: sudo apt-get install -y xvfb
+      - run: sh scripts/test-e2e.sh
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        timeout-minutes: 15
+
+  release:
+    runs-on: ubuntu-latest
+    needs: e2e
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # A release is cut once per manifest version.
+      - id: version
+        run: |
+          tag="v$(jq -r .version manifest.json)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" >/dev/null 2>&1; then echo "exists=true" >> "$GITHUB_OUTPUT"; fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - if: steps.version.outputs.exists != 'true'
+        run: |
+          node scripts/package.js
+          gh release create "${{ steps.version.outputs.tag }}" dist/*.zip --title "${{ steps.version.outputs.tag }}" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
