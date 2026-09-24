@@ -22,7 +22,7 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 24px;
+  gap: 16px;
   width: 100%;
   height: 100%;
   padding: 32px;
@@ -40,9 +40,10 @@ body {
   outline: none;
 }
 
+/* Sites mostly ship 16 or 32 px icons; larger than this they blur. */
 #icon {
-  width: 96px;
-  height: 96px;
+  width: 48px;
+  height: 48px;
   object-fit: contain;
   filter: grayscale(0.6);
 }
