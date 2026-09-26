@@ -290,7 +290,7 @@ export function createPinSync(chrome) {
     const placeholder = window.tabs.find((tab) => tab.pinned && placeholderOf(tab)?.id === pin.id);
     const tab = placeholder
       ? await navigatePinned(placeholder, pin.url)
-      : await edit(() => chrome.tabs.create({ windowId, index: 0, pinned: true, active: false, url: pin.url }));
+      : await createPinned({ windowId, index: 0, active: false, url: pin.url });
     pin.tabId = tab.id;
     pin.windowId = windowId;
   }
@@ -349,9 +349,9 @@ export function createPinSync(chrome) {
     // Chromium closes a window whose last tab leaves, and creating a tab
     // makes Vivaldi focus its window, so a new placeholder is made only when
     // both windows hold nothing else.
-    const replacement = await edit(() => chrome.tabs.create({
-      windowId: live.windowId, index: live.index, pinned: true, active: false, url: placeholderUrl(pageUrl, pin),
-    }));
+    const replacement = await createPinned({
+      windowId: live.windowId, index: live.index, active: false, url: placeholderUrl(pageUrl, pin),
+    });
     await edit(() => chrome.tabs.update(replacement.id, { active: true }));
     await moveInto(live, placeholder);
     await placePinned(live.id, placeholder.windowId, placeholder.index);
@@ -379,6 +379,13 @@ export function createPinSync(chrome) {
     if (!tab.pinned) tab = await edit(() => chrome.tabs.update(tabId, { pinned: true }));
     if (tab.index !== index) tab = await edit(() => chrome.tabs.move(tabId, { index }));
     return tab;
+  }
+
+  // Vivaldi ignores the pinned property of chrome.tabs.create and makes an
+  // ordinary tab, so such a tab is pinned afterwards and put at its index.
+  async function createPinned(properties) {
+    const tab = await edit(() => chrome.tabs.create({ ...properties, pinned: true }));
+    return tab.pinned ? tab : placePinned(tab.id, tab.windowId, properties.index);
   }
 
   // Vivaldi by default keeps a pinned tab on its site and opens a page from
@@ -431,9 +438,9 @@ export function createPinSync(chrome) {
     for (const [index, slot] of wanted.entries()) {
       if (slot.pin) {
         if (slot.pin.windowId === window.id) continue;
-        const tab = await edit(() => chrome.tabs.create({
-          windowId: window.id, index, pinned: true, active: false, url: placeholderUrl(pageUrl, slot.pin),
-        }));
+        const tab = await createPinned({
+          windowId: window.id, index, active: false, url: placeholderUrl(pageUrl, slot.pin),
+        });
         order.splice(index, 0, tab.id);
       } else if (order[index] !== slot.tabId) {
         await edit(() => chrome.tabs.move(slot.tabId, { index }));

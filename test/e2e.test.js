@@ -43,9 +43,11 @@ async function start({ restoreSession = false, sandbox, extension = extensionPat
     await writeFile(join(sandbox.profile, 'Default', 'Preferences'), JSON.stringify({
       extensions: { ui: { developer_mode: true } },
       session: { restore_on_startup: restoreSession ? 1 : 5 },
-      // Brave asks before closing a window with several tabs, which holds
-      // up chrome.windows.remove until someone answers.
+      // Brave asks before closing a window with several tabs and Edge before
+      // closing one with pinned tabs, which holds up chrome.windows.remove
+      // until someone answers.
       brave: { enable_window_closing_confirm: false },
+      browser: { edge_show_warn_before_closing_window_with_pinned_tabs_prompt: false },
     }));
   }
   let browser;
@@ -148,9 +150,14 @@ function createWindow(worker, name, options = {}) {
     pageUrl(name), options);
 }
 
-function openTab(worker, windowId, name, properties = {}) {
-  return worker.run(async (windowId, url, properties) => (await chrome.tabs.create({ windowId, url, ...properties })).id,
-    windowId, pageUrl(name), properties);
+// Vivaldi ignores the pinned property of chrome.tabs.create, so a tab to be
+// pinned is pinned once open, as the user pins one.
+function openTab(worker, windowId, name, { pinned = false, ...properties } = {}) {
+  return worker.run(async (windowId, url, pinned, properties) => {
+    const tab = await chrome.tabs.create({ windowId, url, ...properties });
+    if (pinned) await chrome.tabs.update(tab.id, { pinned: true });
+    return tab.id;
+  }, windowId, pageUrl(name), pinned, properties);
 }
 
 async function tabIdByTitle(worker, windowId, title, { placeholder = false } = {}) {
@@ -393,12 +400,13 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
   test('install gathers pins from several windows and merges duplicate pages', async () => {
     const { worker } = await open({ restoreSession: true, extension: fixturePath });
     await worker.run(async (x, y, z) => {
+      const pin = async (windowId, url) => chrome.tabs.update((await chrome.tabs.create({ windowId, url })).id, { pinned: true });
       const first = await chrome.windows.create({ url: 'about:blank#first' });
       const second = await chrome.windows.create({ url: 'about:blank#second' });
-      await chrome.tabs.create({ windowId: first.id, url: x, pinned: true });
-      await chrome.tabs.create({ windowId: first.id, url: y, pinned: true });
-      await chrome.tabs.create({ windowId: second.id, url: `${x}#fragment`, pinned: true });
-      await chrome.tabs.create({ windowId: second.id, url: z, pinned: true });
+      await pin(first.id, x);
+      await pin(first.id, y);
+      await pin(second.id, `${x}#fragment`);
+      await pin(second.id, z);
     }, pageUrl('x'), pageUrl('y'), pageUrl('z'));
     await waitFor(async () => (await current.browser.targets()).filter((target) => target.title === 'x').length === 2);
     const { worker: synced } = await restart({ extension: extensionPath });
