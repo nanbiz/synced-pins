@@ -18,7 +18,7 @@ Description:
 
 Every window gets the same pinned tabs, like Essentials in the Zen browser.
 
-Each pinned tab is open in one window. Your other windows show it in the same place, with its icon, and selecting it there brings the page over as it is: nothing reloads, a video keeps playing, a half-typed message stays. Switching windows on its own moves nothing, so a pinned tab can keep running in the background in one window while you work in another.
+Each pinned tab is open in one window. Your other windows show it in the same place, with its icon, and selecting it there brings the page over as it is: nothing reloads, a video keeps playing, a half-typed message stays. Switching to a window that shows a pinned tab brings the page back there too. A window showing one of its own tabs takes nothing, so a pinned tab can keep running in one window while you work in another.
 
 Pin, unpin, close or reorder a pinned tab in any window and every window follows. Close the window a pinned tab is open in and it opens again in the window you used last. Popups, installed web apps and incognito windows are left alone.
 

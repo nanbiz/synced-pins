@@ -7,10 +7,19 @@ const BUSY_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1600];
 
 // Reloading the extension, which reports the install reason "update", makes
 // Chromium close the old version's pages, except that a window's last tab is
-// turned into the New Tab page and stays pinned.
-const NEW_TAB_URL = 'chrome://newtab/';
+// turned into the New Tab page and stays pinned. Chromium's New Tab page has
+// the host newtab under the browser's own scheme: chrome://newtab/,
+// edge://newtab/ and so on.
+function isNewTabPage(url) {
+  try {
+    const { protocol, hostname } = new URL(url);
+    return hostname === 'newtab' && !['http:', 'https:', 'file:'].includes(protocol);
+  } catch {
+    return false;
+  }
+}
 
-const STATE_KEYS = ['pins', 'placeholders', 'activeTabs', 'focusOrder', 'orders'];
+const STATE_KEYS = ['pins', 'placeholders', 'focusOrder', 'orders'];
 
 // Keeps the pinned area of every normal window showing the same ordered pins.
 // Each pin has one live tab in one window; every other normal window shows a
@@ -23,9 +32,8 @@ const STATE_KEYS = ['pins', 'placeholders', 'activeTabs', 'focusOrder', 'orders'
 export function createPinSync(chrome) {
   const pageUrl = chrome.runtime.getURL('src/placeholder.html');
   const hints = [];
-  // Tabs this extension activated or removed itself, so the events these
-  // operations fire are never read as the user's doing.
-  const ownActivations = new Set();
+  // Tabs this extension removed itself, so the events these removals fire
+  // are never read as the user closing them.
   const ownRemovals = new Set();
   // Windows whose tabs are being closed with the window; they are left alone.
   const closingWindows = new Set();
@@ -52,13 +60,9 @@ export function createPinSync(chrome) {
   async function pass(batch) {
     const stored = await chrome.storage.session.get(STATE_KEYS);
     let state;
-    if (stored.pins) {
+    const rebuilding = !stored.pins;
+    if (!rebuilding) {
       state = structuredClone(stored);
-      if (batch.every((hint) => hint.type === 'focused')) {
-        applyFocus(state, batch);
-        await save(stored, state);
-        return;
-      }
     } else {
       // Hints gathered before the pin list exists describe tabs the rebuild
       // reads directly, so they are dropped.
@@ -70,6 +74,13 @@ export function createPinSync(chrome) {
     let layout = await readLayout();
     const actions = inferUserChanges(state, layout, removed);
     await carryOut(state, layout, actions, summons);
+    // A rebuild reads the tabs while Chromium may still be closing the old
+    // version's placeholder pages; which tab a window selects is settled by
+    // the events that follow, and the next pass places the pins from those.
+    for (const summon of rebuilding ? [] : placeByPrecedence(state, await readLayout())) {
+      const pin = state.pins.find((candidate) => candidate.id === summon.pinId);
+      if (pin) await bringLiveTab(pin, summon.placeholderId);
+    }
     // The user may have pinned or reordered meanwhile; arranging from a
     // layout those changes are missing from would revert them.
     layout = await readLayout();
@@ -116,7 +127,6 @@ export function createPinSync(chrome) {
         case 'windowRemoved':
           closingWindows.delete(hint.windowId);
           state.focusOrder = state.focusOrder.filter((id) => id !== hint.windowId);
-          delete state.activeTabs[hint.windowId];
           delete state.orders[hint.windowId];
           break;
         case 'removed':
@@ -125,14 +135,14 @@ export function createPinSync(chrome) {
         case 'replaced':
           replaceTabId(state, hint.removedTabId, hint.addedTabId);
           break;
-        case 'activated': {
-          const summon = await selectedPlaceholder(state, hint);
-          if (summon) summons.push(summon);
-          break;
-        }
         case 'summon': {
           const pinId = state.placeholders[hint.tabId];
-          if (pinId) summons.push({ pinId, placeholderId: hint.tabId });
+          if (!pinId) break;
+          // Acting on a placeholder page is using its window, even where no
+          // focus event reported it, so placement ranks that window first
+          // and keeps the pin there.
+          applyFocus(state, [hint]);
+          summons.push({ pinId, placeholderId: hint.tabId });
           break;
         }
       }
@@ -146,20 +156,6 @@ export function createPinSync(chrome) {
       state.placeholders[newId] = state.placeholders[oldId];
       delete state.placeholders[oldId];
     }
-  }
-
-  // A placeholder counts as selected by the user only when the tab selected
-  // before it is still in the window. Otherwise Chromium picked it because
-  // the selected tab was closed or dragged away.
-  async function selectedPlaceholder(state, { tabId, windowId }) {
-    const previousId = state.activeTabs[windowId];
-    state.activeTabs[windowId] = tabId;
-    if (ownActivations.delete(tabId)) return null;
-    const pinId = state.placeholders[tabId];
-    if (!pinId || previousId === undefined) return null;
-    const previous = await chrome.tabs.get(previousId).catch(() => null);
-    if (previous?.windowId !== windowId) return null;
-    return { pinId, placeholderId: tabId };
   }
 
   // Compares the tabs with the pin list of the previous pass. Differences the
@@ -293,15 +289,40 @@ export function createPinSync(chrome) {
     const window = layout.windows.find((candidate) => candidate.id === windowId);
     const placeholder = window.tabs.find((tab) => tab.pinned && placeholderOf(tab)?.id === pin.id);
     const tab = placeholder
-      ? await edit(() => chrome.tabs.update(placeholder.id, { url: pin.url }))
+      ? await navigatePinned(placeholder, pin.url)
       : await edit(() => chrome.tabs.create({ windowId, index: 0, pinned: true, active: false, url: pin.url }));
     pin.tabId = tab.id;
     pin.windowId = windowId;
   }
 
+  // A pin's live tab goes to the window whose selected tab is that pin, its
+  // live tab or a placeholder; when several windows show it, to the one
+  // focused most recently. Focus and tab selection fire events, so this runs
+  // on every change without polling.
+  function placeByPrecedence(state, layout) {
+    const rank = (window) => {
+      const at = state.focusOrder.indexOf(window.id);
+      return at === -1 ? Infinity : at;
+    };
+    const summons = [];
+    for (const pin of state.pins) {
+      const live = layout.tabs.get(pin.tabId);
+      if (!live) continue;
+      const [first] = layout.windows
+        .map((window) => ({ window, tab: window.tabs.find((tab) => tab.active) }))
+        .filter(({ tab }) => tab && (tab.id === live.id || placeholderOf(tab)?.id === pin.id))
+        .sort((a, b) => rank(a.window) - rank(b.window));
+      if (first && first.tab.id !== live.id) summons.push({ pinId: pin.id, placeholderId: first.tab.id });
+    }
+    return summons;
+  }
+
   // Swaps the live tab and the selected placeholder between their windows,
-  // each taking the other's place. A window never runs out of tabs on the
-  // way: the tab leaving a window that holds nothing else goes second.
+  // each taking the other's place and selected there if the tab it replaces
+  // was. A window never runs out of tabs on the way: the tab leaving a window
+  // that holds nothing else goes second. Both tabs change windows and are
+  // selected before either is pinned in place, which keeps the moment short
+  // in which the first window shows the tab beside the one that left.
   async function bringLiveTab(pin, placeholderId) {
     const [live, placeholder] = await Promise.all([
       chrome.tabs.get(pin.tabId).catch(() => null),
@@ -309,32 +330,32 @@ export function createPinSync(chrome) {
     ]);
     if (!live || !placeholder || live.windowId === placeholder.windowId) return;
     if (placeholderOf(placeholder)?.id !== pin.id) return;
-    const moveLive = async () => {
-      await placePinned(live.id, placeholder.windowId, placeholder.index);
-      if (placeholder.active) await edit(() => chrome.tabs.update(live.id, { active: true }));
-    };
-    const movePlaceholder = async () => {
-      const moved = await placePinned(placeholder.id, live.windowId, live.index);
-      if (live.active) await activate(moved);
+    const moveInto = async (tab, into) => {
+      await edit(() => chrome.tabs.move(tab.id, { windowId: into.windowId, index: into.index }));
+      if (into.active) await edit(() => chrome.tabs.update(tab.id, { active: true }));
     };
     const [sourceCount, targetCount] = await Promise.all([
       tabCount(live.windowId),
       tabCount(placeholder.windowId),
     ]);
-    if (sourceCount > 1) {
-      await moveLive();
-      await movePlaceholder();
-    } else if (targetCount > 1) {
-      await movePlaceholder();
-      await moveLive();
-    } else {
-      const replacement = await edit(() => chrome.tabs.create({
-        windowId: live.windowId, index: live.index, pinned: true, active: false, url: placeholderUrl(pageUrl, pin),
-      }));
-      await activate(replacement);
-      await moveLive();
-      await removeTabs([placeholder.id]);
+    if (sourceCount > 1 || targetCount > 1) {
+      const [first, second] = sourceCount > 1 ? [live, placeholder] : [placeholder, live];
+      await moveInto(first, second);
+      await moveInto(second, first);
+      await placePinned(live.id, placeholder.windowId, placeholder.index);
+      await placePinned(placeholder.id, live.windowId, live.index);
+      return;
     }
+    // Chromium closes a window whose last tab leaves, and creating a tab
+    // makes Vivaldi focus its window, so a new placeholder is made only when
+    // both windows hold nothing else.
+    const replacement = await edit(() => chrome.tabs.create({
+      windowId: live.windowId, index: live.index, pinned: true, active: false, url: placeholderUrl(pageUrl, pin),
+    }));
+    await edit(() => chrome.tabs.update(replacement.id, { active: true }));
+    await moveInto(live, placeholder);
+    await placePinned(live.id, placeholder.windowId, placeholder.index);
+    await removeTabs([placeholder.id]);
   }
 
   // Unpinning a placeholder ends its pin, with the live tab taking the
@@ -360,10 +381,13 @@ export function createPinSync(chrome) {
     return tab;
   }
 
-  async function activate(tab) {
-    if (tab.active) return;
-    ownActivations.add(tab.id);
-    await edit(() => chrome.tabs.update(tab.id, { active: true }));
+  // Vivaldi by default keeps a pinned tab on its site and opens a page from
+  // another site in a new tab instead, so the tab is unpinned while it
+  // navigates and then pinned again in its place.
+  async function navigatePinned(tab, url) {
+    await edit(() => chrome.tabs.update(tab.id, { pinned: false }));
+    await edit(() => chrome.tabs.update(tab.id, { url }));
+    return placePinned(tab.id, tab.windowId, tab.index);
   }
 
   async function tabCount(windowId) {
@@ -458,22 +482,19 @@ export function createPinSync(chrome) {
       const pinId = placeholderOf(tab)?.id;
       if (pinId && pinIds.has(pinId)) placeholders[tab.id] = pinId;
     }
-    const activeTabs = { ...state.activeTabs };
-    for (const window of layout.windows) {
-      activeTabs[window.id] ??= window.tabs.find((tab) => tab.active)?.id;
-    }
     // Every window was arranged in list order; recording that rather than
     // what the tabs show now leaves a reorder made meanwhile for the next pass.
     const pinIdsInOrder = state.pins.map((pin) => pin.id);
     const orders = Object.fromEntries(layout.windows.map((window) => [window.id, pinIdsInOrder]));
-    return { ...state, placeholders, activeTabs, orders };
+    return { ...state, placeholders, orders };
   }
 
   // Builds the pin list from the tabs alone, after browser start, install,
   // update or re-enabling. Pinned pages are live tabs and placeholders carry
   // their pin in their URL. Pins sharing a URL, ignoring the fragment, are
-  // merged into one; a pin left with only placeholders gets its page back in
-  // one of them.
+  // merged into one, whose live tab is a loaded one where there is a choice:
+  // a tab the browser restored or discarded without loading shows no page.
+  // A pin left with only placeholders gets its page back in one of them.
   async function rebuild(installReason) {
     if (installReason === 'update') await unpinLeftoverNewTabs();
     const layout = await readLayout();
@@ -486,6 +507,8 @@ export function createPinSync(chrome) {
     const withNewId = new Set();
     const duplicates = [];
     const placeholders = [];
+    const liveTabs = new Map();
+    const unloaded = (tab) => tab.status === 'unloaded' || tab.discarded;
     for (const window of windows) {
       for (const tab of window.tabs.filter((candidate) => candidate.pinned)) {
         const described = placeholderOf(tab);
@@ -505,30 +528,33 @@ export function createPinSync(chrome) {
           withNewId.add(pin);
           byUrl.set(key, pin);
           pins.push(pin);
+          liveTabs.set(pin, tab);
         } else if (pin.tabId === null) {
           Object.assign(pin, { tabId: tab.id, ...liveTabDetails(tab) });
+          liveTabs.set(pin, tab);
+        } else if (unloaded(liveTabs.get(pin)) && !unloaded(tab)) {
+          duplicates.push({ pin, tab: liveTabs.get(pin) });
+          Object.assign(pin, { tabId: tab.id, ...liveTabDetails(tab) });
+          liveTabs.set(pin, tab);
         } else {
           duplicates.push({ pin, tab });
         }
       }
     }
     for (const { pin, tab } of duplicates) {
-      await edit(() => chrome.tabs.update(tab.id, { url: placeholderUrl(pageUrl, pin) }));
+      await navigatePinned(tab, placeholderUrl(pageUrl, pin));
     }
     for (const pin of pins.filter((candidate) => candidate.tabId === null)) {
       const { tab } = placeholders.find((placeholder) => placeholder.pin === pin);
-      await edit(() => chrome.tabs.update(tab.id, { url: pin.url }));
+      await navigatePinned(tab, pin.url);
       Object.assign(pin, { tabId: tab.id, windowId: tab.windowId });
     }
-    const activeTabs = Object.fromEntries(layout.windows.map((window) => [
-      window.id, window.tabs.find((tab) => tab.active)?.id,
-    ]));
-    return { pins, placeholders: {}, activeTabs, focusOrder: lastFocused ? [lastFocused.id] : [], orders: {} };
+    return { pins, placeholders: {}, focusOrder: lastFocused ? [lastFocused.id] : [], orders: {} };
   }
 
   async function unpinLeftoverNewTabs() {
     const tabs = await chrome.tabs.query({ pinned: true, windowType: 'normal' });
-    for (const tab of tabs.filter((candidate) => (candidate.pendingUrl || candidate.url) === NEW_TAB_URL)) {
+    for (const tab of tabs.filter((candidate) => isNewTabPage(candidate.pendingUrl || candidate.url))) {
       await edit(() => chrome.tabs.update(tab.id, { pinned: false }));
     }
   }

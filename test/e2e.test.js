@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createServer } from 'node:http';
 import { after, afterEach, before, describe, test } from 'node:test';
@@ -43,6 +43,9 @@ async function start({ restoreSession = false, sandbox, extension = extensionPat
     await writeFile(join(sandbox.profile, 'Default', 'Preferences'), JSON.stringify({
       extensions: { ui: { developer_mode: true } },
       session: { restore_on_startup: restoreSession ? 1 : 5 },
+      // Brave asks before closing a window with several tabs, which holds
+      // up chrome.windows.remove until someone answers.
+      brave: { enable_window_closing_confirm: false },
     }));
   }
   let browser;
@@ -229,16 +232,54 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     assert.equal(await liveWindowOf(worker, a), A);
   });
 
+  test('a pin shown in two windows stays in the one focused more recently', async () => {
+    const { worker } = await open();
+    const { windows: [A, B, C], a } = await threeWindowsWithPins(worker);
+    await select(worker, a);
+    await focus(worker, B);
+    await focus(worker, A);
+    await focus(worker, C);
+    await select(worker, await tabIdByTitle(worker, B, 'a', { placeholder: true }));
+    await expectPinnedAreas(worker, [A, B, C], [['a', 'b'], ['~a', '~b'], ['~a', '~b']]);
+    assert.equal(await liveWindowOf(worker, a), A);
+  });
+
+  test('focusing a window that shows a placeholder brings its pin there', async () => {
+    const { worker } = await open();
+    const { windows: [A, B, C], a } = await threeWindowsWithPins(worker);
+    await select(worker, a);
+    await focus(worker, B);
+    await select(worker, await tabIdByTitle(worker, B, 'a', { placeholder: true }));
+    await expectPinnedAreas(worker, [A, B, C], [['~a', 'b'], ['a', '~b'], ['~a', '~b']]);
+    await focus(worker, A);
+    await expectPinnedAreas(worker, [A, B, C], [['a', 'b'], ['~a', '~b'], ['~a', '~b']]);
+    assert.equal(await liveWindowOf(worker, a), A);
+  });
+
+  test('a pin left behind returns to the background window still showing it', async () => {
+    const { worker } = await open();
+    const { windows: [A, B, C], a } = await threeWindowsWithPins(worker);
+    await select(worker, a);
+    await focus(worker, B);
+    await select(worker, await tabIdByTitle(worker, B, 'a', { placeholder: true }));
+    await expectPinnedAreas(worker, [A, B, C], [['~a', 'b'], ['a', '~b'], ['~a', '~b']]);
+    await select(worker, await tabIdByTitle(worker, B, 'B'));
+    await expectPinnedAreas(worker, [A, B, C], [['a', 'b'], ['~a', '~b'], ['~a', '~b']]);
+    assert.equal(await liveWindowOf(worker, a), A);
+  });
+
   test('the old window selects the placeholder only when the live tab was selected there', async () => {
     const { worker } = await open();
     const { windows: [A, B, C], a, b } = await threeWindowsWithPins(worker);
     await select(worker, a);
+    await focus(worker, B);
     await select(worker, await tabIdByTitle(worker, B, 'a', { placeholder: true }));
     await expectPinnedAreas(worker, [A, B, C], [['~a', 'b'], ['a', '~b'], ['~a', '~b']]);
     const activeIn = async (windowId) => (await layout(worker)).find((window) => window.id === windowId).tabs.find((tab) => tab.active);
     await waitFor(async () => (await activeIn(A)).placeholder === 'a');
     const pageA = await tabIdByTitle(worker, A, 'A');
     await select(worker, pageA);
+    await focus(worker, C);
     await select(worker, await tabIdByTitle(worker, C, 'b', { placeholder: true }));
     await expectPinnedAreas(worker, [A, B, C], [['~a', '~b'], ['a', '~b'], ['~a', 'b']]);
     await waitFor(async () => (await activeIn(C)).title === 'b');
@@ -246,17 +287,22 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     assert.equal(await liveWindowOf(worker, b), C);
   });
 
-  test('pressing Enter on a shown placeholder brings its pin back', async () => {
+  test('the button on a placeholder in a window focused less recently brings its pin there', async () => {
     const { worker, browser } = await open();
     const { windows: [A, B, C], a } = await threeWindowsWithPins(worker);
     await select(worker, a);
-    await select(worker, await tabIdByTitle(worker, B, 'a', { placeholder: true }));
-    await expectPinnedAreas(worker, [A, B, C], [['~a', 'b'], ['a', '~b'], ['~a', '~b']]);
-    const shown = await tabIdByTitle(worker, A, 'a', { placeholder: true });
-    await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).active, shown));
-    await (await placeholderPage(browser, shown)).press('Enter');
-    await expectPinnedAreas(worker, [A, B, C], [['a', 'b'], ['~a', '~b'], ['~a', '~b']]);
-    assert.equal((await worker.run((id) => chrome.tabs.get(id), a)).active, true);
+    await focus(worker, A);
+    await waitFor(() => worker.run(async (id) => (await chrome.storage.session.get('focusOrder')).focusOrder[0] === id, A));
+    const shown = await tabIdByTitle(worker, C, 'a', { placeholder: true });
+    await select(worker, shown);
+    // Vivaldi delivers no input events to a window without focus, and giving
+    // C focus would bring the pin by itself, so the button is pressed from
+    // inside the page.
+    await (await placeholderPage(browser, shown)).run(() => document.getElementById('summon').click());
+    await expectPinnedAreas(worker, [A, B, C], [['~a', 'b'], ['~a', '~b'], ['a', '~b']]);
+    const tab = await worker.run((id) => chrome.tabs.get(id), a);
+    assert.equal(tab.windowId, C);
+    assert.equal(tab.active, true);
   });
 
   test('unpinning the live tab ends the pin', async () => {
@@ -318,7 +364,9 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     }
     await worker.run((id) => chrome.windows.remove(id), A);
     await expectPinnedAreas(worker, [B, C], [['a', 'b'], ['~a', '~b']]);
-    await waitForTitle(worker, await tabIdByTitle(worker, B, 'a'), 'a');
+    // The tab shows the placeholder's title until its page commits.
+    await waitFor(async () => (await layout(worker)).find((window) => window.id === B).tabs
+      .some((tab) => tab.pinned && tab.url === pageUrl('a') && tab.title === 'a'));
   });
 
   test('a title change of the live tab reaches its placeholders', async () => {
@@ -368,6 +416,8 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     const { worker } = await open({ restoreSession: true });
     await threeWindowsWithPins(worker);
     await select(worker, (await layout(worker)).flatMap((window) => window.tabs).find((tab) => tab.placeholder === 'b').id);
+    // The window now showing b's placeholder takes b, even in the background.
+    await waitFor(async () => (await allPinnedAreas(worker)).includes('["~a","b"]'));
     const before = await allPinnedAreas(worker);
     const { worker: restarted } = await restart();
     let after;
@@ -377,10 +427,20 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     }).catch(() => assert.deepEqual(after, before));
   });
 
-  test('a restart without session restore keeps each pin once', async () => {
-    const { worker } = await open();
+  test('a restart without session restore keeps each pin once', async (t) => {
+    const { worker, browser, sandbox } = await open();
     await threeWindowsWithPins(worker);
-    const { worker: restarted } = await restart();
+    await browser.quit();
+    // Chromium reopens the pinned tabs it listed in Preferences on quitting,
+    // even without session restore. Edge lists none and starts without them,
+    // which leaves nothing to check.
+    const { pinned_tabs: saved = [] } = JSON.parse(await readFile(join(sandbox.profile, 'Default', 'Preferences'), 'utf8'));
+    if (saved.length === 0) {
+      t.skip('the browser keeps no pinned tabs across a start without session restore');
+      return;
+    }
+    current = await start({ sandbox });
+    const { worker: restarted } = current;
     await waitFor(async () => {
       const areas = (await layout(restarted)).map(pinnedArea);
       return areas.some((area) => area.join() === 'a,b')
@@ -388,16 +448,45 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     });
   });
 
+  test('a rebuild keeps the loaded copy of a pin live rather than one the browser unloaded', async () => {
+    const { worker, browser } = await open();
+    const A = await createWindow(worker, 'A');
+    const B = await createWindow(worker, 'B');
+    const loaded = await openTab(worker, A, 'x', { pinned: true, active: false });
+    await waitForTitle(worker, loaded, 'x');
+    const copy = await openTab(worker, B, 'x#copy', { pinned: true, active: false });
+    await waitForTitle(worker, copy, 'x');
+    await waitFor(async () => (await pinnedAreas(worker, [A, B])).every((area) => [...area].sort().join() === 'x,~x'));
+    // Discarding may give the tab a new id.
+    await worker.run((id) => chrome.tabs.discard(id), copy);
+    await waitFor(async () => (await layout(worker)).find((window) => window.id === B).tabs.some((tab) => tab.url.endsWith('#copy')
+      && tab.pinned) && worker.run(async (id) => (await chrome.tabs.query({ windowId: id, discarded: true })).length === 1, B));
+    // B, focused last, is read first, so its copy of x is found first.
+    await worker.run(() => { setTimeout(() => chrome.runtime.reload(), 0); });
+    await waitFor(() => worker.run(() => false).catch(() => true));
+    const reloaded = await readyWorker(browser);
+    await expectPinnedAreas(reloaded, [A, B], [['x'], ['~x']]);
+    assert.equal(await liveWindowOf(reloaded, loaded), A);
+  });
+
   test('reloading the extension rebuilds the placeholders Chromium closed', async () => {
     const { worker, browser } = await open();
-    const { windows: [A, B, C] } = await threeWindowsWithPins(worker);
+    const { windows: [A, B, C], a } = await threeWindowsWithPins(worker);
+    // C is left holding nothing but placeholders, which stays so only while
+    // the pin it selects is shown in a window focused more recently.
+    await select(worker, a);
+    await focus(worker, A);
+    await waitFor(() => worker.run(async (id) => (await chrome.storage.session.get('focusOrder')).focusOrder[0] === id, A));
+    await select(worker, await tabIdByTitle(worker, C, 'a', { placeholder: true }));
     await worker.run((id) => chrome.tabs.remove(id), await tabIdByTitle(worker, C, 'C'));
     await expectPinnedAreas(worker, [A, B, C], [['a', 'b'], ['~a', '~b'], ['~a', '~b']]);
     await worker.run(() => { setTimeout(() => chrome.runtime.reload(), 0); });
     await waitFor(() => worker.run(() => false).catch(() => true));
     const reloaded = await readyWorker(browser);
     await expectPinnedAreas(reloaded, [A, B, C], [['a', 'b'], ['~a', '~b'], ['~a', '~b']]);
+    // The New Tab page is chrome://newtab/, or the same under the browser's
+    // own scheme, such as edge://newtab/.
     const unpinned = (await layout(reloaded)).find((window) => window.id === C).tabs.filter((tab) => !tab.pinned);
-    assert.deepEqual(unpinned.map((tab) => tab.url), ['chrome://newtab/']);
+    assert.deepEqual(unpinned.map((tab) => new URL(tab.url).hostname), ['newtab']);
   });
 });

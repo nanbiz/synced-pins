@@ -7,7 +7,7 @@ const layoutChanged = () => sync.note({ type: 'layout' });
 chrome.runtime.onInstalled.addListener(({ reason }) => sync.note({ type: 'installed', reason }));
 chrome.runtime.onStartup.addListener(layoutChanged);
 chrome.runtime.onMessage.addListener((message, sender) => {
-  if (message === 'summon' && sender.tab) sync.note({ type: 'summon', tabId: sender.tab.id });
+  if (message === 'summon' && sender.tab) sync.note({ type: 'summon', tabId: sender.tab.id, windowId: sender.tab.windowId });
 });
 
 chrome.windows.onCreated.addListener(layoutChanged, normalWindows);
@@ -16,7 +16,7 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId !== chrome.windows.WINDOW_ID_NONE) sync.note({ type: 'focused', windowId });
 }, normalWindows);
 
-chrome.tabs.onActivated.addListener(({ tabId, windowId }) => sync.note({ type: 'activated', tabId, windowId }));
+chrome.tabs.onActivated.addListener(layoutChanged);
 chrome.tabs.onRemoved.addListener((tabId, { windowId, isWindowClosing }) => {
   sync.note({ type: 'removed', tabId, windowId, windowClosing: isWindowClosing });
 });

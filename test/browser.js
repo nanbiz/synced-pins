@@ -55,10 +55,19 @@ function browserEnv(sandbox) {
     XDG_RUNTIME_DIR: sandbox.runtime,
     DBUS_SESSION_BUS_ADDRESS: 'disabled:',
     GDK_BACKEND: 'x11',
+    // Vivaldi otherwise looks for a proprietary media library to fetch on
+    // start.
+    VIVALDI_FFMPEG_AUTO: '0',
   };
   delete env.WAYLAND_DISPLAY;
   return env;
 }
+
+// Branded Google Chrome ignores --load-extension. With
+// SYNCED_PINS_LOAD=cdp the extension is loaded over the DevTools protocol
+// instead, which the browser allows only with
+// --enable-unsafe-extension-debugging.
+const loadOverDevTools = process.env.SYNCED_PINS_LOAD === 'cdp';
 
 // The browser runs headed, on the Xvfb display scripts/test-e2e.sh starts;
 // that script marks the environment so no other display is ever used.
@@ -75,15 +84,26 @@ export async function launchBrowser({ executable, sandbox, extensionPath }) {
     '--disable-component-update',
     '--disable-sync',
     '--password-store=basic',
-    `--disable-extensions-except=${extensionPath}`,
-    `--load-extension=${extensionPath}`,
+    ...(loadOverDevTools
+      ? ['--enable-unsafe-extension-debugging']
+      : [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]),
     '--ozone-platform=x11',
     'about:blank',
   ], { env: browserEnv(sandbox), stdio: ['ignore', 'ignore', 'pipe'], detached: true });
   const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
   const url = await devToolsUrl(child);
   const connection = await Connection.open(url);
-  return new Browser(child, exited, connection, extensionIdForPath(extensionPath));
+  let extensionId = extensionIdForPath(extensionPath);
+  if (loadOverDevTools) {
+    try {
+      ({ id: extensionId } = await connection.send('Extensions.loadUnpacked', { path: extensionPath }));
+    } catch (error) {
+      connection.close();
+      process.kill(-child.pid, 'SIGKILL');
+      throw error;
+    }
+  }
+  return new Browser(child, exited, connection, extensionId);
 }
 
 function devToolsUrl(child) {

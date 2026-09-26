@@ -2,6 +2,9 @@
 # Runs the end-to-end suite with a headed Chromium on a private Xvfb display.
 # Headless Chromium reports every window as focused and fires no focus
 # events, so the focus-dependent behaviour can only be tested headed.
+# CHROME_PATH picks the browser. SYNCED_PINS_LOAD=cdp loads the extension
+# over the DevTools protocol, for browsers that ignore --load-extension such
+# as branded Google Chrome.
 set -eu
 cd "$(dirname "$0")/.."
 if ! command -v xvfb-run >/dev/null; then

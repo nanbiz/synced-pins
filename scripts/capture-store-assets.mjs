@@ -219,7 +219,8 @@ async function demo(worker, { left, right, article }) {
   await sleep(2500);
 
   // Selecting the article's placeholder in the right window brings the page
-  // there, still scrolled to where it was read.
+  // there, still scrolled to where it was read. The left window, which was
+  // showing the article, now shows its placeholder.
   const target = pinnedTab(RIGHT, PINS.indexOf(ARTICLE));
   await click(target.x, target.y);
   await waitFor(async () => await liveIn(worker, article, right) && showsPlaceholder(worker, left), { timeout: 10_000 });
@@ -229,20 +230,13 @@ async function demo(worker, { left, right, article }) {
   await screenshot(screenshotPath(2));
   await sleep(1800);
 
-  // Switching windows without selecting a tab moves nothing.
+  // Switching back to the left window, which shows the placeholder, brings
+  // the article back.
   await click(LEFT.left + EMPTY_STRIP_X, LEFT.top + TAB_ROW_Y);
-  await waitFor(() => focused(worker, left));
-  await sleep(300);
-  await parkPointer();
-  await sleep(1800);
-  await click(RIGHT.left + EMPTY_STRIP_X, RIGHT.top + TAB_ROW_Y);
-  await waitFor(() => focused(worker, right));
+  await waitFor(async () => await liveIn(worker, article, left) && showsPlaceholder(worker, right), { timeout: 10_000 });
   await sleep(300);
   await parkPointer();
   await sleep(2500);
-  if (!await liveIn(worker, article, right) || !await showsPlaceholder(worker, left)) {
-    throw new Error('switching windows moved the article');
-  }
 }
 
 // Every placeholder has picked up its pin's title and icon.

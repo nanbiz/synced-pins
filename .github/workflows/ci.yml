@@ -7,22 +7,72 @@ on:
 
 jobs:
   e2e:
+    name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chrome-for-testing, chromium, google-chrome, brave, edge, vivaldi]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # Chrome for Testing: branded Chrome ignores --load-extension since 137.
-      - uses: browser-actions/setup-chrome@v1
-        id: chrome
       # Ubuntu 24.04 forbids the unprivileged user namespaces Chrome's sandbox needs.
       - run: |
           sudo apt-get install -y xvfb
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - if: matrix.browser == 'chrome-for-testing'
+        uses: browser-actions/setup-chrome@v2
+        id: chrome-for-testing
+      - if: matrix.browser == 'chrome-for-testing'
+        run: echo "CHROME_PATH=${{ steps.chrome-for-testing.outputs.chrome-path }}" >> "$GITHUB_ENV"
+
+      - if: matrix.browser == 'chromium'
+        uses: browser-actions/setup-chrome@v2
+        id: chromium
+        with:
+          chrome-version: latest
+      - if: matrix.browser == 'chromium'
+        run: echo "CHROME_PATH=${{ steps.chromium.outputs.chrome-path }}" >> "$GITHUB_ENV"
+
+      # Branded Chrome ignores --load-extension since 137, so the suite loads
+      # the extension over the DevTools protocol there.
+      - if: matrix.browser == 'google-chrome'
+        run: |
+          curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          echo "CHROME_PATH=/usr/bin/google-chrome-stable" >> "$GITHUB_ENV"
+          echo "SYNCED_PINS_LOAD=cdp" >> "$GITHUB_ENV"
+
+      - if: matrix.browser == 'brave'
+        run: |
+          sudo curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
+          sudo curl -fsSLo /etc/apt/sources.list.d/brave-browser-release.sources https://brave-browser-apt-release.s3.brave.com/brave-browser.sources
+          sudo apt-get update
+          sudo apt-get install -y brave-browser
+          echo "CHROME_PATH=/usr/bin/brave-browser-stable" >> "$GITHUB_ENV"
+
+      - if: matrix.browser == 'edge'
+        run: |
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-edge.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-edge.gpg] https://packages.microsoft.com/repos/edge stable main" | sudo tee /etc/apt/sources.list.d/microsoft-edge.list
+          sudo apt-get update
+          sudo apt-get install -y microsoft-edge-stable
+          echo "CHROME_PATH=/usr/bin/microsoft-edge-stable" >> "$GITHUB_ENV"
+
+      - if: matrix.browser == 'vivaldi'
+        run: |
+          curl -fsSL https://repo.vivaldi.com/stable/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/vivaldi.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/vivaldi.gpg] https://repo.vivaldi.com/stable/deb/ stable main" | sudo tee /etc/apt/sources.list.d/vivaldi.list
+          sudo apt-get update
+          sudo apt-get install -y vivaldi-stable
+          echo "CHROME_PATH=/usr/bin/vivaldi-stable" >> "$GITHUB_ENV"
+
       - run: sh scripts/test-e2e.sh
-        env:
-          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         timeout-minutes: 15
 
   release:
