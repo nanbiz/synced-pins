@@ -245,6 +245,26 @@ function liveWindowOf(worker, tabId) {
   return worker.run(async (id) => (await chrome.tabs.get(id)).windowId, tabId);
 }
 
+// Presses Ctrl+Shift+T in the window, on its page of this name, the way the
+// user reopens the tab closed last.
+async function reopenClosedTab(browser, worker, windowId, name) {
+  await focus(worker, windowId);
+  await select(worker, await tabIdByTitle(worker, windowId, name));
+  await (await browser.page(pageUrl(name))).press('T', { ctrl: true, shift: true, wait: false });
+}
+
+// Every window shows the pins in this order, and each pin is live in exactly
+// one of them.
+async function expectEachPinOnce(worker, titles) {
+  let areas;
+  await waitFor(async () => {
+    areas = (await layout(worker)).map(pinnedArea);
+    const live = areas.flat().filter((title) => !title.startsWith('~')).sort();
+    return areas.every((area) => area.map((title) => title.replace('~', '')).join() === titles.join())
+      && live.join() === [...titles].sort().join();
+  }).catch(() => assert.fail(`pinned areas: ${JSON.stringify(areas)}`));
+}
+
 describe('synced pins', { skip, concurrency: 1 }, () => {
   test('pinning a tab in one window adds its placeholder to the others', async () => {
     const { worker } = await open();
@@ -541,13 +561,105 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     await waitForStoredTitles(restarted, ['a', 'b']);
   });
 
+  test('reopening a pin closed from its live tab brings it back everywhere', async () => {
+    const { worker, browser } = await open();
+    const { windows: [A, B, C], a } = await threeWindowsWithPins(worker);
+    await worker.run((id) => chrome.tabs.remove(id), a);
+    await expectPinnedAreas(worker, [A, B, C], [['b'], ['~b'], ['~b']]);
+    await reopenClosedTab(browser, worker, A, 'A');
+    await expectEachPinOnce(worker, ['a', 'b']);
+  });
+
+  test('reopening a pin closed from a placeholder brings it back everywhere', async () => {
+    const { worker, browser } = await open();
+    const { windows: [A, B, C] } = await threeWindowsWithPins(worker);
+    await worker.run((id) => chrome.tabs.remove(id), await tabIdByTitle(worker, C, 'b', { placeholder: true }));
+    await expectPinnedAreas(worker, [A, B, C], [['a'], ['~a'], ['~a']]);
+    await reopenClosedTab(browser, worker, C, 'C');
+    await expectEachPinOnce(worker, ['a', 'b']);
+  });
+
+  test('reopening the window a pin was live in keeps each pin once', async () => {
+    const { worker, browser } = await open();
+    const { windows: [A, B, C] } = await threeWindowsWithPins(worker);
+    for (const windowId of [C, B]) {
+      await focus(worker, windowId);
+      await waitFor(() => worker.run(async (id) => (await chrome.storage.session.get('focusOrder')).focusOrder[0] === id, windowId));
+    }
+    await worker.run((id) => chrome.windows.remove(id), A);
+    await expectPinnedAreas(worker, [B, C], [['a', 'b'], ['~a', '~b']]);
+    await reopenClosedTab(browser, worker, B, 'B');
+    await waitFor(async () => (await layout(worker)).length === 4);
+    await expectEachPinOnce(worker, ['a', 'b']);
+  });
+
+  test('reopening the placeholder a swap between one-tab windows closed keeps the pin once', async () => {
+    const { worker, browser } = await open();
+    const A = await createWindow(worker, 'x');
+    const x = (await worker.run((id) => chrome.tabs.query({ windowId: id }), A))[0].id;
+    await worker.run((id) => chrome.tabs.update(id, { pinned: true }), x);
+    await waitForTitle(worker, x, 'x');
+    const B = await createWindow(worker, 'B');
+    await expectPinnedAreas(worker, [A, B], [['x'], ['~x']]);
+    await worker.run((id) => chrome.tabs.remove(id), await tabIdByTitle(worker, B, 'B'));
+    await focus(worker, B);
+    await expectPinnedAreas(worker, [A, B], [['~x'], ['x']]);
+    await reopenClosedTab(browser, worker, B, 'x');
+    await waitFor(async () => (await layout(worker)).find((window) => window.id === B).tabs.length === 1);
+    await expectPinnedAreas(worker, [A, B], [['~x'], ['x']]);
+    assert.equal(await liveWindowOf(worker, x), B);
+  });
+
+  test('reopening the copy a late session restore closed keeps the pin once', async () => {
+    const { worker } = await open();
+    await threeWindowsWithPins(worker);
+    await waitForStoredTitles(worker, ['a', 'b']);
+    const { worker: restarted, browser: started } = await restartWithoutTabs();
+    await expectAllPinnedAreas(restarted, [['a', 'b']]);
+    const [first] = await layout(restarted);
+    await restarted.run(async (url) => {
+      const window = await chrome.windows.create({ url, focused: true });
+      await chrome.tabs.update(window.tabs[0].id, { pinned: true });
+    }, `${pageUrl('a')}#restored`);
+    await expectAllPinnedAreas(restarted, [['~a', 'b'], ['a', '~b']]);
+    // The tab closed last is the copy of a the merge closed in the first
+    // window, which now shows a placeholder for a.
+    await openTab(restarted, first.id, 'F', { active: true });
+    await reopenClosedTab(started, restarted, first.id, 'F');
+    await expectEachPinOnce(restarted, ['a', 'b']);
+    // The reopened copy was selected, so the live tab comes to its window.
+    await expectPinnedAreas(restarted, [first.id], [['a', 'b']]);
+    const live = (await layout(restarted)).find((window) => window.id === first.id).tabs.find((tab) => tab.title === 'a');
+    assert.equal(live.active, true);
+    assert.equal(live.url, `${pageUrl('a')}#restored`);
+  });
+
+  test('pinning a second tab at the address of a pin selects that pin instead', async () => {
+    const { worker } = await open();
+    const { windows: [A, B, C], a } = await threeWindowsWithPins(worker);
+    await focus(worker, B);
+    const copy = await openTab(worker, B, 'a#again', { active: true });
+    await waitForTitle(worker, copy, 'a');
+    await worker.run((id) => chrome.tabs.update(id, { pinned: true }), copy);
+    await expectPinnedAreas(worker, [A, B, C], [['~a', 'b'], ['a', '~b'], ['~a', '~b']]);
+    assert.equal(await worker.run((id) => chrome.tabs.get(id).then(() => true, () => false), copy), false);
+    const tab = await worker.run((id) => chrome.tabs.get(id), a);
+    assert.equal(tab.windowId, B);
+    assert.equal(tab.active, true);
+  });
+
   test('a rebuild keeps the loaded copy of a pin live rather than one the browser unloaded', async () => {
     const { worker, browser } = await open();
     const A = await createWindow(worker, 'A');
     const B = await createWindow(worker, 'B');
     const loaded = await openTab(worker, A, 'x', { pinned: true, active: false });
     await waitForTitle(worker, loaded, 'x');
-    const copy = await openTab(worker, B, 'x#copy', { pinned: true, active: false });
+    // Pinning a second tab at x would merge it into x, so the second pin
+    // starts elsewhere and its page goes to x after.
+    const copy = await openTab(worker, B, 'y', { pinned: true, active: false });
+    await waitForTitle(worker, copy, 'y');
+    await waitFor(async () => (await pinnedAreas(worker, [A])).flat().includes('~y'));
+    await worker.run((id, url) => chrome.tabs.update(id, { url }), copy, pageUrl('x#copy'));
     await waitForTitle(worker, copy, 'x');
     await waitFor(async () => (await pinnedAreas(worker, [A, B])).every((area) => [...area].sort().join() === 'x,~x'));
     // Discarding may give the tab a new id.
