@@ -601,7 +601,7 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     await waitForTitle(worker, x, 'x');
     const B = await createWindow(worker, 'B');
     await expectPinnedAreas(worker, [A, B], [['x'], ['~x']]);
-    await worker.run((id) => chrome.tabs.remove(id), await tabIdByTitle(worker, B, 'B'));
+    await worker.run(async (id) => chrome.tabs.remove((await chrome.tabs.query({ windowId: id, pinned: false }))[0].id), B);
     await focus(worker, B);
     await expectPinnedAreas(worker, [A, B], [['~x'], ['x']]);
     await reopenClosedTab(browser, worker, B, 'x');
