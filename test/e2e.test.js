@@ -246,11 +246,29 @@ function liveWindowOf(worker, tabId) {
 }
 
 // Presses Ctrl+Shift+T in the window, on its page of this name, the way the
-// user reopens the tab closed last.
+// user reopens the tab closed last, and waits for the tab to open. Vivaldi
+// now and then drops the key press, even in a focused window, so a press
+// that opens nothing is repeated.
 async function reopenClosedTab(browser, worker, windowId, name) {
   await focus(worker, windowId);
   await select(worker, await tabIdByTitle(worker, windowId, name));
-  await (await browser.page(pageUrl(name))).press('T', { ctrl: true, shift: true, wait: false });
+  await waitFor(() => worker.run(async (id) => (await chrome.windows.get(id)).focused, windowId));
+  const page = await browser.page(pageUrl(name));
+  await worker.run(() => {
+    globalThis.reopened = false;
+    chrome.tabs.onCreated.addListener(function listener() {
+      globalThis.reopened = true;
+      chrome.tabs.onCreated.removeListener(listener);
+    });
+  });
+  for (let attempt = 1; ; attempt++) {
+    await page.press('T', { ctrl: true, shift: true, wait: false });
+    try {
+      return await waitFor(() => worker.run(() => globalThis.reopened), { timeout: 5_000 });
+    } catch (error) {
+      if (attempt === 3) throw error;
+    }
+  }
 }
 
 // Every window shows the pins in this order, and each pin is live in exactly
@@ -579,7 +597,10 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     await expectEachPinOnce(worker, ['a', 'b']);
   });
 
-  test('reopening the window a pin was live in keeps each pin once', async () => {
+  // Vivaldi's Ctrl+Shift+T reopens closed tabs only, and a tab from the
+  // closed window is not among them.
+  const reopensWindows = !/vivaldi/i.test(executable ?? '') || 'Vivaldi reopens no windows with Ctrl+Shift+T';
+  test('reopening the window a pin was live in keeps each pin once', { skip: reopensWindows !== true && reopensWindows }, async () => {
     const { worker, browser } = await open();
     const { windows: [A, B, C] } = await threeWindowsWithPins(worker);
     for (const windowId of [C, B]) {
@@ -624,7 +645,7 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     await expectAllPinnedAreas(restarted, [['~a', 'b'], ['a', '~b']]);
     // The tab closed last is the copy of a the merge closed in the first
     // window, which now shows a placeholder for a.
-    await openTab(restarted, first.id, 'F', { active: true });
+    await waitForTitle(restarted, await openTab(restarted, first.id, 'F', { active: true }), 'F');
     await reopenClosedTab(started, restarted, first.id, 'F');
     await expectEachPinOnce(restarted, ['a', 'b']);
     // The reopened copy was selected, so the live tab comes to its window.

@@ -257,13 +257,14 @@ export function createPinSync(chrome) {
   // pin there as selecting a placeholder does. A window showing the pin
   // nowhere first gets a placeholder in the copy's place.
   //
-  // A placeholder of a pin that no longer exists opens that pin's page again
-  // and makes it a pin once more, under its old id, so placeholders of it
-  // reopened elsewhere stand for it.
+  // A placeholder of a pin that no longer exists makes that pin exist again,
+  // under its old id, so placeholders of it reopened elsewhere stand for it,
+  // and becomes its live tab. Vivaldi brings a reopened tab back unloaded and
+  // then loads its old page over any address given meanwhile, so the pin's
+  // page is opened in it once it has loaded, on the update that reports it.
   async function settleReopenedTabs(state, layout) {
     const known = new Set([...state.pins.map((pin) => pin.tabId), ...Object.keys(state.placeholders).map(Number)]);
     const copies = [];
-    let changed = false;
     for (const window of layout.windows) {
       const pinned = window.tabs.filter((tab) => tab.pinned);
       const created = [];
@@ -271,8 +272,8 @@ export function createPinSync(chrome) {
         if (known.has(tab.id)) continue;
         const described = placeholderOf(tab);
         if (described && !state.pins.some((pin) => pin.id === described.id)) {
-          await revive(state, pinned, tab, described);
-          changed = true;
+          revive(state, pinned, tab, described);
+          known.add(tab.id);
           continue;
         }
         const address = urlWithoutFragment(tab.pendingUrl || tab.url);
@@ -297,20 +298,32 @@ export function createPinSync(chrome) {
       }
     }
     if (copies.length > 0) await removeTabs(copies);
-    return changed || copies.length > 0;
+    let changed = copies.length > 0;
+    for (const pin of state.pins.filter((candidate) => candidate.reviving)) {
+      const tab = layout.tabs.get(pin.tabId);
+      if (!tab) continue;
+      const showsPlaceholder = placeholderOf(tab)?.id === pin.id;
+      if (showsPlaceholder && tab.status !== 'complete') continue;
+      delete pin.reviving;
+      if (!showsPlaceholder) continue;
+      await navigatePinned(tab, pin.url);
+      changed = true;
+    }
+    return changed;
   }
 
-  async function revive(state, pinned, tab, described) {
+  // Puts the pin a reopened placeholder describes back into the list right
+  // after the pin preceding it in its window, with that tab as its live tab.
+  function revive(state, pinned, tab, described) {
     const pinIds = new Set(state.pins.map((pin) => pin.id));
     let previousId = null;
     for (const other of pinned.slice(0, pinned.indexOf(tab))) {
       const pinId = pinIdOf(state, other);
       if (pinIds.has(pinId)) previousId = pinId;
     }
-    const opened = await navigatePinned(tab, described.url);
     const { id, url, title, favIconUrl } = described;
     const at = previousId === null ? 0 : state.pins.findIndex((pin) => pin.id === previousId) + 1;
-    state.pins.splice(at, 0, { id, url, title, favIconUrl, tabId: opened.id, windowId: opened.windowId });
+    state.pins.splice(at, 0, { id, url, title, favIconUrl, tabId: tab.id, windowId: tab.windowId, reviving: true });
   }
 
   // Compares the tabs with the pin list of the previous pass. Differences the
@@ -332,7 +345,9 @@ export function createPinSync(chrome) {
         ended.set(pin.id, { closeLiveTab: false });
         continue;
       }
-      Object.assign(pin, liveTabDetails(tab));
+      // A live tab still showing its own placeholder has no page to take
+      // details from yet.
+      if (placeholderOf(tab)?.id !== pin.id) Object.assign(pin, liveTabDetails(tab));
     }
     for (const [tabId, pinId] of Object.entries(state.placeholders)) {
       const tab = layout.tabs.get(Number(tabId));
@@ -597,7 +612,9 @@ export function createPinSync(chrome) {
     // Extras go first, so a closed tab was closed where the window showed it,
     // which is where reopening it puts it back. A placeholder that showed up
     // during the pass is left to the next.
-    const extras = pinned.filter((tab) => !used.has(tab.id) && isSettled(tab) && placeholderOf(tab)).map((tab) => tab.id);
+    const live = new Set(pins.map((pin) => pin.tabId));
+    const extras = pinned.filter((tab) => !used.has(tab.id) && !live.has(tab.id) && isSettled(tab) && placeholderOf(tab))
+      .map((tab) => tab.id);
     if (extras.length > 0) await removeTabs(extras);
     let order = pinned.map((tab) => tab.id).filter((id) => !extras.includes(id));
     for (const [index, slot] of wanted.entries()) {
@@ -648,7 +665,8 @@ export function createPinSync(chrome) {
         placeholders[tabId] = pinId;
       }
     }
-    for (const tab of [...layout.tabs.values()].filter(isSettled)) {
+    const live = new Set(state.pins.map((pin) => pin.tabId));
+    for (const tab of [...layout.tabs.values()].filter((candidate) => isSettled(candidate) && !live.has(candidate.id))) {
       const pinId = placeholderOf(tab)?.id;
       if (pinId && pinIds.has(pinId)) placeholders[tab.id] = pinId;
     }
