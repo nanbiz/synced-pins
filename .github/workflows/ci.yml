@@ -81,6 +81,8 @@ jobs:
     if: github.event_name == 'push'
     permissions:
       contents: write
+    env:
+      CWS_SERVICE_ACCOUNT_KEY: ${{ secrets.CWS_SERVICE_ACCOUNT_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -100,3 +102,47 @@ jobs:
           gh release create "${{ steps.version.outputs.tag }}" dist/*.zip --title "${{ steps.version.outputs.tag }}" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
+      # The store takes the same zip and puts it up for review. A service
+      # account signs a JWT that Google trades for an access token.
+      - if: steps.version.outputs.exists != 'true' && env.CWS_SERVICE_ACCOUNT_KEY != ''
+        run: |
+          b64url() { openssl base64 -e -A | tr '+/' '-_' | tr -d '='; }
+          key="$RUNNER_TEMP/cws-key.pem"
+          jq -r .private_key <<<"$CWS_SERVICE_ACCOUNT_KEY" > "$key"
+          now=$(date +%s)
+          claims=$(jq -nc --arg iss "$(jq -r .client_email <<<"$CWS_SERVICE_ACCOUNT_KEY")" --argjson now "$now" \
+            '{iss: $iss, scope: "https://www.googleapis.com/auth/chromewebstore", aud: "https://oauth2.googleapis.com/token", iat: $now, exp: ($now + 600)}')
+          unsigned="$(printf '{"alg":"RS256","typ":"JWT"}' | b64url).$(printf '%s' "$claims" | b64url)"
+          jwt="$unsigned.$(printf '%s' "$unsigned" | openssl dgst -sha256 -sign "$key" | b64url)"
+          rm -f "$key"
+          grant=$(curl -sS https://oauth2.googleapis.com/token \
+            -d grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer -d assertion="$jwt")
+          token=$(jq -r '.access_token // empty' <<<"$grant")
+          [ -n "$token" ] || { echo "::error::Google refused the service account key: $(jq -r '.error_description // .error // .' <<<"$grant")"; exit 1; }
+          echo "::add-mask::$token"
+
+          # Leaves the response in $body, and fails with the API's message on an HTTP error.
+          api() {
+            out=$(curl -sS -w '\n%{http_code}' -H "Authorization: Bearer $token" "$@")
+            code=${out##*$'\n'}
+            body=${out%$'\n'*}
+            if [ "$code" -ge 300 ]; then echo "::error::Chrome Web Store: $(jq -r '.error.message // .' <<<"$body")"; exit 1; fi
+          }
+          item="https://chromewebstore.googleapis.com/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_ITEM_ID"
+          upload="https://chromewebstore.googleapis.com/upload/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_ITEM_ID"
+
+          api -X POST -T dist/*.zip "$upload:upload"
+          state=$(jq -r .uploadState <<<"$body")
+          for _ in $(seq 30); do
+            [ "$state" = IN_PROGRESS ] || break
+            sleep 10
+            api "$item:fetchStatus"
+            state=$(jq -r .lastAsyncUploadState <<<"$body")
+          done
+          [ "$state" = SUCCEEDED ] || { echo "::error::Chrome Web Store upload ended as $state: $body"; exit 1; }
+
+          api -X POST -H 'Content-Type: application/json' -d '{}' "$item:publish"
+          jq . <<<"$body"
+        env:
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+          CWS_ITEM_ID: ${{ vars.CWS_ITEM_ID }}
