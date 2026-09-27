@@ -16,7 +16,7 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId !== chrome.windows.WINDOW_ID_NONE) sync.note({ type: 'focused', windowId });
 }, normalWindows);
 
-chrome.tabs.onActivated.addListener(layoutChanged);
+chrome.tabs.onActivated.addListener(({ tabId }) => sync.note({ type: 'activated', tabId }));
 chrome.tabs.onRemoved.addListener((tabId, { windowId, isWindowClosing }) => {
   sync.note({ type: 'removed', tabId, windowId, windowClosing: isWindowClosing });
 });

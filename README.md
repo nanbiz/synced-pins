@@ -15,11 +15,12 @@ From the [Releases](https://github.com/nanbiz/synced-pins/releases) page: unzip 
 - Pin a tab in any window and it shows up pinned in all of them. Unpinning, closing and reordering pinned tabs work the same way from any window.
 - In a window where a pinned tab is not open, its place holds a stand-in page with the tab's icon and title. That is what a window shows when the tab it was showing is pulled into another window.
 - Close the window a pinned tab is open in and the tab opens again in the window you used last, at the same address.
+- Pinned tabs stay across a browser restart or crash. Any the browser does not bring back open again in the window you used last, in the same order. If the browser restores its old session afterwards, its tab takes the place of the reopened one, as long as you have not selected that one yet.
 - Popups, installed web apps and incognito windows are left alone.
 
 ## Permissions
 
-`tabs` lets the extension read the address, title and icon of your pinned tabs, which it needs to draw them in your other windows. Chrome describes this permission as "Read your browsing history". `storage` keeps the list of pinned tabs while the browser runs. Nothing is sent anywhere; see [PRIVACY.md](PRIVACY.md).
+`tabs` lets the extension read the address, title and icon of your pinned tabs, which it needs to draw them in your other windows. Chrome describes this permission as "Read your browsing history". `storage` keeps the list of pinned tabs while the browser runs and across restarts. Nothing is sent anywhere; see [PRIVACY.md](PRIVACY.md).
 
 ## Develop
 
