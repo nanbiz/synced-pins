@@ -599,8 +599,10 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
 
   // Vivaldi's Ctrl+Shift+T reopens closed tabs only, and a tab from the
   // closed window is not among them.
-  const reopensWindows = !/vivaldi/i.test(executable ?? '') || 'Vivaldi reopens no windows with Ctrl+Shift+T';
-  test('reopening the window a pin was live in keeps each pin once', { skip: reopensWindows !== true && reopensWindows }, async () => {
+  const vivaldi = /vivaldi/i.test(executable ?? '');
+  test('reopening the window a pin was live in keeps each pin once', {
+    skip: vivaldi && 'Vivaldi reopens no windows with Ctrl+Shift+T',
+  }, async () => {
     const { worker, browser } = await open();
     const { windows: [A, B, C] } = await threeWindowsWithPins(worker);
     for (const windowId of [C, B]) {
@@ -614,7 +616,10 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     await expectEachPinOnce(worker, ['a', 'b']);
   });
 
-  test('reopening the placeholder a swap between one-tab windows closed keeps the pin once', async () => {
+  // Vivaldi reopens no tab at all after this swap, from either window.
+  test('reopening the placeholder a swap between one-tab windows closed keeps the pin once', {
+    skip: vivaldi && 'Vivaldi reopens nothing with Ctrl+Shift+T here',
+  }, async () => {
     const { worker, browser } = await open();
     const A = await createWindow(worker, 'x');
     const x = (await worker.run((id) => chrome.tabs.query({ windowId: id }), A))[0].id;
