@@ -204,6 +204,43 @@ function focus(worker, windowId) {
   return worker.run((id) => chrome.windows.update(id, { focused: true }), windowId);
 }
 
+// The titles of the pins stored for the next browser start, in order.
+async function storedTitles(worker) {
+  return worker.run(async () => ((await chrome.storage.local.get('pins')).pins ?? []).map((pin) => pin.title));
+}
+
+async function waitForStoredTitles(worker, expected) {
+  let actual;
+  await waitFor(async () => {
+    actual = await storedTitles(worker);
+    return actual.join() === expected.join();
+  }).catch(() => assert.deepEqual(actual, expected));
+}
+
+// Quits and starts again on the same profile with nothing reopened: Chromium
+// reopens the pinned tabs it lists in Preferences even without session
+// restore, and a browser after a crash, or Edge, starts without them.
+async function restartWithoutTabs() {
+  const { sandbox } = current;
+  await current.browser.quit();
+  const preferences = join(sandbox.profile, 'Default', 'Preferences');
+  const { pinned_tabs: _, ...rest } = JSON.parse(await readFile(preferences, 'utf8'));
+  await writeFile(preferences, JSON.stringify(rest));
+  current = await start({ sandbox });
+  return current;
+}
+
+// The pinned areas of all windows once they show the expected ones, in any
+// window order.
+async function expectAllPinnedAreas(worker, expected) {
+  const want = expected.map((area) => JSON.stringify(area)).sort();
+  let actual;
+  await waitFor(async () => {
+    actual = await allPinnedAreas(worker);
+    return JSON.stringify(actual) === JSON.stringify(want);
+  }).catch(() => assert.deepEqual(actual, want));
+}
+
 function liveWindowOf(worker, tabId) {
   return worker.run(async (id) => (await chrome.tabs.get(id)).windowId, tabId);
 }
@@ -435,25 +472,73 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     }).catch(() => assert.deepEqual(after, before));
   });
 
-  test('a restart without session restore keeps each pin once', async (t) => {
-    const { worker, browser, sandbox } = await open();
+  test('a restart without session restore keeps each pin once', async () => {
+    const { worker } = await open();
     await threeWindowsWithPins(worker);
-    await browser.quit();
+    await waitForStoredTitles(worker, ['a', 'b']);
     // Chromium reopens the pinned tabs it listed in Preferences on quitting,
-    // even without session restore. Edge lists none and starts without them,
-    // which leaves nothing to check.
-    const { pinned_tabs: saved = [] } = JSON.parse(await readFile(join(sandbox.profile, 'Default', 'Preferences'), 'utf8'));
-    if (saved.length === 0) {
-      t.skip('the browser keeps no pinned tabs across a start without session restore');
-      return;
-    }
-    current = await start({ sandbox });
-    const { worker: restarted } = current;
+    // even without session restore; Edge lists none. Either way each pin is
+    // there once.
+    const { worker: restarted } = await restart();
     await waitFor(async () => {
       const areas = (await layout(restarted)).map(pinnedArea);
       return areas.some((area) => area.join() === 'a,b')
         && areas.every((area) => ['a,b', '~a,~b'].includes(area.join()));
     });
+  });
+
+  test('pins come back after a restart that reopens none of their tabs', async () => {
+    const { worker } = await open();
+    await threeWindowsWithPins(worker);
+    await waitForStoredTitles(worker, ['a', 'b']);
+    const { worker: restarted } = await restartWithoutTabs();
+    await expectAllPinnedAreas(restarted, [['a', 'b']]);
+    const urls = (await layout(restarted)).flatMap((window) => window.tabs).filter((tab) => tab.pinned).map((tab) => tab.url);
+    assert.deepEqual(urls, [pageUrl('a'), pageUrl('b')]);
+  });
+
+  test('a pin closed before quitting stays closed', async () => {
+    const { worker } = await open();
+    const { windows, a } = await threeWindowsWithPins(worker);
+    await worker.run((id) => chrome.tabs.remove(id), a);
+    await expectPinnedAreas(worker, windows, [['b'], ['~b'], ['~b']]);
+    await waitForStoredTitles(worker, ['b']);
+    const { worker: restarted } = await restartWithoutTabs();
+    await expectAllPinnedAreas(restarted, [['b']]);
+  });
+
+  test('pins come back in the order they had', async () => {
+    const { worker } = await open();
+    const { windows: [A, B, C] } = await threeWindowsWithPins(worker);
+    const c = await openTab(worker, A, 'c', { pinned: true, active: false });
+    await waitForTitle(worker, c, 'c');
+    await expectPinnedAreas(worker, [A, B, C], [['a', 'b', 'c'], ['~a', '~b', '~c'], ['~a', '~b', '~c']]);
+    await worker.run((id) => chrome.tabs.move(id, { index: 0 }), await tabIdByTitle(worker, B, 'c', { placeholder: true }));
+    await expectPinnedAreas(worker, [A, B, C], [['c', 'a', 'b'], ['~c', '~a', '~b'], ['~c', '~a', '~b']]);
+    await waitForStoredTitles(worker, ['c', 'a', 'b']);
+    const { worker: restarted } = await restartWithoutTabs();
+    await expectAllPinnedAreas(restarted, [['c', 'a', 'b']]);
+  });
+
+  test('a session restored after the pins came back merges into one tab per pin', async () => {
+    const { worker } = await open();
+    await threeWindowsWithPins(worker);
+    await waitForStoredTitles(worker, ['a', 'b']);
+    const { worker: restarted } = await restartWithoutTabs();
+    await expectAllPinnedAreas(restarted, [['a', 'b']]);
+    const [first] = await layout(restarted);
+    const recreated = first.tabs.find((tab) => tab.pinned && tab.title === 'a').id;
+    // A late restore, as after a crash, opens the old window with its pinned
+    // tab, whose address may carry a fragment.
+    const restored = await restarted.run(async (url) => {
+      const window = await chrome.windows.create({ url, focused: true });
+      return (await chrome.tabs.update(window.tabs[0].id, { pinned: true })).id;
+    }, `${pageUrl('a')}#restored`);
+    await expectPinnedAreas(restarted, [first.id], [['~a', 'b']]);
+    await expectAllPinnedAreas(restarted, [['~a', 'b'], ['a', '~b']]);
+    assert.equal(await restarted.run((id) => chrome.tabs.get(id).then(() => true, () => false), recreated), false);
+    assert.equal((await restarted.run((id) => chrome.tabs.get(id), restored)).pinned, true);
+    await waitForStoredTitles(restarted, ['a', 'b']);
   });
 
   test('a rebuild keeps the loaded copy of a pin live rather than one the browser unloaded', async () => {
