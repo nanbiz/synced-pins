@@ -198,21 +198,26 @@ class Context {
   }
 
   // Sends a key press through the browser's input pipeline, so browser
-  // shortcuts such as Ctrl+1 act as they do for the user.
-  async press(key, { ctrl = false } = {}) {
-    const code = /^[0-9]$/.test(key) ? `Digit${key}` : key;
-    const keyCode = key === 'Enter' ? 13 : key.charCodeAt(0);
+  // shortcuts such as Ctrl+1 and Ctrl+Shift+T act as they do for the user.
+  // A shortcut that selects another tab can leave the page unable to answer,
+  // so with wait off the events are sent without waiting for their answers,
+  // and the caller waits for what the shortcut does instead.
+  async press(key, { ctrl = false, shift = false, wait = true } = {}) {
+    const code = /^[0-9]$/.test(key) ? `Digit${key}` : /^[A-Z]$/i.test(key) ? `Key${key.toUpperCase()}` : key;
+    const keyCode = key === 'Enter' ? 13 : key.toUpperCase().charCodeAt(0);
     const text = key === 'Enter' ? '\r' : undefined;
     for (const type of [text ? 'keyDown' : 'rawKeyDown', 'keyUp']) {
-      await this.connection.send('Input.dispatchKeyEvent', {
+      const sent = this.connection.send('Input.dispatchKeyEvent', {
         type,
         key,
         code,
-        modifiers: ctrl ? 2 : 0,
+        modifiers: (ctrl ? 2 : 0) | (shift ? 8 : 0),
         windowsVirtualKeyCode: keyCode,
         nativeVirtualKeyCode: keyCode,
         text: type === 'keyUp' ? undefined : text,
       }, this.sessionId);
+      if (wait) await sent;
+      else sent.catch(() => {});
     }
   }
 
