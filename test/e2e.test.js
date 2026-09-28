@@ -643,9 +643,26 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     const { worker: restarted, browser: started } = await restartWithoutTabs();
     await expectAllPinnedAreas(restarted, [['a', 'b']]);
     const [first] = await layout(restarted);
+    // A restored window arrives with its tabs already pinned. Creating one
+    // and then pinning its tab would let a pass give the window a placeholder
+    // for a in between, which the merge closes after the copy, and reopening
+    // would bring back that placeholder instead. The extension's reads of the
+    // windows wait until the tab is pinned.
     await restarted.run(async (url) => {
-      const window = await chrome.windows.create({ url, focused: true });
-      await chrome.tabs.update(window.tabs[0].id, { pinned: true });
+      const getAll = chrome.windows.getAll;
+      let release;
+      const pinnedYet = new Promise((resolve) => { release = resolve; });
+      chrome.windows.getAll = async (...args) => {
+        await pinnedYet;
+        return getAll.apply(chrome.windows, args);
+      };
+      try {
+        const window = await chrome.windows.create({ url, focused: true });
+        await chrome.tabs.update(window.tabs[0].id, { pinned: true });
+      } finally {
+        chrome.windows.getAll = getAll;
+        release();
+      }
     }, `${pageUrl('a')}#restored`);
     await expectAllPinnedAreas(restarted, [['~a', 'b'], ['a', '~b']]);
     // The tab closed last is the copy of a the merge closed in the first
