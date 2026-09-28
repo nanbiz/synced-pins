@@ -39,9 +39,10 @@ export function createPinSync(chrome) {
   const ownRemovals = new Set();
   // Windows whose tabs are being closed with the window; they are left alone.
   const closingWindows = new Set();
-  // The tabs the current pass has told apart as reopened or not, and those
-  // it created; a pinned tab that shows up later is left to the pass its
-  // events start. Null while every tab counts, as in a rebuild.
+  // The pinned tabs the current pass has told apart as reopened or not, and
+  // the tabs it created; a tab that is pinned only later, reopened or pinned
+  // by the user meanwhile, is left to the pass its events start. Null while
+  // every tab counts, as in a rebuild.
   let settled = null;
   // The pin list as last written to chrome.storage.local, as JSON.
   let persisted;
@@ -88,7 +89,7 @@ export function createPinSync(chrome) {
     // reopened.
     if (!rebuilding) {
       if (await settleReopenedTabs(state, layout)) layout = await readMergedLayout(state);
-      settled = new Set(layout.tabs.keys());
+      settled = new Set([...layout.tabs.values()].filter((tab) => tab.pinned).map((tab) => tab.id));
     }
     const actions = inferUserChanges(state, layout, removed);
     if (await carryOut(state, layout, actions, summons) === 'stranded') {
@@ -154,7 +155,7 @@ export function createPinSync(chrome) {
   }
 
   function isSettled(tab) {
-    return !settled || settled.has(tab.id);
+    return !settled || settled.has(tab.id) || !tab.pinned;
   }
 
   function placeholderOf(tab) {
