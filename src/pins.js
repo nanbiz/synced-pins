@@ -112,8 +112,11 @@ export function createPinSync(chrome) {
     locatePins(state, layout);
     adoptNewPins(state, layout);
     adoptReorder(state, layout);
-    for (const window of layout.windows) await arrangeWindow(state.pins, window);
-    await save(stored, await finish(state));
+    const arranged = new Set();
+    for (const window of layout.windows) {
+      if (await arrangeWindow(state.pins, window)) arranged.add(window.id);
+    }
+    await save(stored, await finish(state, arranged));
   }
 
   function applyFocus(state, batch) {
@@ -597,24 +600,27 @@ export function createPinSync(chrome) {
   // Makes the window's pinned area hold, in list order, each pin's live tab
   // where it lives and exactly one placeholder everywhere else, touching only
   // what differs.
+  //
+  // A window holding a pinned tab that showed up during the pass is left to
+  // the next pass, which tells that tab apart first; arranging around it
+  // would move the other pins past it.
   async function arrangeWindow(pins, window) {
     const pinned = window.tabs.filter((tab) => tab.pinned);
+    if (!pinned.every(isSettled)) return false;
     const used = new Set();
     const wanted = pins.map((pin) => {
       const tab = pin.windowId === window.id
         ? pinned.find((candidate) => candidate.id === pin.tabId)
-        : pinned.find((candidate) => !used.has(candidate.id) && isSettled(candidate)
-          && placeholderOf(candidate)?.id === pin.id);
+        : pinned.find((candidate) => !used.has(candidate.id) && placeholderOf(candidate)?.id === pin.id);
       if (!tab) return { pin };
       used.add(tab.id);
       return { tabId: tab.id };
     });
     await refreshFrozenPlaceholders(pins, pinned);
     // Extras go first, so a closed tab was closed where the window showed it,
-    // which is where reopening it puts it back. A placeholder that showed up
-    // during the pass is left to the next.
+    // which is where reopening it puts it back.
     const live = new Set(pins.map((pin) => pin.tabId));
-    const extras = pinned.filter((tab) => !used.has(tab.id) && !live.has(tab.id) && isSettled(tab) && placeholderOf(tab))
+    const extras = pinned.filter((tab) => !used.has(tab.id) && !live.has(tab.id) && placeholderOf(tab))
       .map((tab) => tab.id);
     if (extras.length > 0) await removeTabs(extras);
     let order = pinned.map((tab) => tab.id).filter((id) => !extras.includes(id));
@@ -631,6 +637,7 @@ export function createPinSync(chrome) {
         order.splice(index, 0, slot.tabId);
       }
     }
+    return true;
   }
 
   // A placeholder page keeps its title, icon and URL current itself, but a
@@ -656,7 +663,7 @@ export function createPinSync(chrome) {
   // pass sees the unpinning, and one missing from the tabs stays recorded
   // until its removal event tells whether the user closed it, unless the
   // extension removed it.
-  async function finish(state) {
+  async function finish(state, arranged) {
     const layout = await readLayout();
     locatePins(state, layout);
     const pinIds = new Set(state.pins.map((pin) => pin.id));
@@ -671,10 +678,13 @@ export function createPinSync(chrome) {
       const pinId = placeholderOf(tab)?.id;
       if (pinId && pinIds.has(pinId)) placeholders[tab.id] = pinId;
     }
-    // Every window was arranged in list order; recording that rather than
-    // what the tabs show now leaves a reorder made meanwhile for the next pass.
+    // Each arranged window was put in list order; recording that rather than
+    // what the tabs show now leaves a reorder made meanwhile for the next
+    // pass. A window left unarranged keeps the order recorded before.
     const pinIdsInOrder = state.pins.map((pin) => pin.id);
-    const orders = Object.fromEntries(layout.windows.map((window) => [window.id, pinIdsInOrder]));
+    const orders = Object.fromEntries(layout.windows
+      .map((window) => [window.id, arranged.has(window.id) ? pinIdsInOrder : state.orders[window.id]])
+      .filter(([, order]) => order));
     return { ...state, placeholders, orders };
   }
 
