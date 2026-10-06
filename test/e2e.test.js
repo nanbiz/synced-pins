@@ -691,6 +691,28 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     assert.equal(tab.active, true);
   });
 
+  test('a pin the browser unloaded stays unloaded until it is selected', async () => {
+    const { worker } = await open();
+    const { windows: [A, B, C], a } = await threeWindowsWithPins(worker);
+    await focus(worker, B);
+    // Discarding may give the tab a new id.
+    const unloaded = await worker.run(async (id) => (await chrome.tabs.discard(id)).id, a);
+    const discarded = () => worker.run(async (id) => (await chrome.tabs.get(id)).discarded, unloaded);
+    assert.equal(await discarded(), true);
+    await focus(worker, C);
+    await focus(worker, A);
+    await focus(worker, B);
+    await expectPinnedAreas(worker, [A, B, C], [['a', 'b'], ['~a', '~b'], ['~a', '~b']]);
+    assert.equal(await discarded(), true);
+    assert.equal(await liveWindowOf(worker, unloaded), A);
+    const [placeholder] = await worker.run(async (id) => (await chrome.tabs.query({ windowId: id, pinned: true }))
+      .filter((tab) => tab.url.includes('/src/placeholder.html')).map((tab) => tab.id), B);
+    await select(worker, placeholder);
+    await expectPinnedAreas(worker, [A, B, C], [['~a', 'b'], ['a', '~b'], ['~a', '~b']]);
+    await waitForTitle(worker, unloaded, 'a');
+    assert.equal(await discarded(), false);
+  });
+
   test('a rebuild keeps the loaded copy of a pin live rather than one the browser unloaded', async () => {
     const { worker, browser } = await open();
     const A = await createWindow(worker, 'A');

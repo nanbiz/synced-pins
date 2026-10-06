@@ -338,13 +338,14 @@ export function createPinSync(chrome) {
     const died = new Set();
     const unpinnedPlaceholders = [];
     for (const pin of state.pins) {
-      const tab = layout.tabs.get(pin.tabId);
+      const tab = layout.tabs.get(pin.tabId) ?? (removed.has(pin.tabId) ? undefined : replacementOf(state, layout, pin));
       if (!tab) {
         const removal = removed.get(pin.tabId);
         if (removal?.windowClosing) died.add(pin.id);
         else if (removal) ended.set(pin.id, { closeLiveTab: false });
         continue;
       }
+      pin.tabId = tab.id;
       if (!tab.pinned) {
         ended.set(pin.id, { closeLiveTab: false });
         continue;
@@ -365,6 +366,18 @@ export function createPinSync(chrome) {
     adoptNewPins(state, layout);
     adoptReorder(state, layout);
     return { ended, died, unpinnedPlaceholders };
+  }
+
+  // Unloading a tab, as Memory Saver or a hibernate command does, replaces it
+  // with a new tab under a new id, and the replacement event can arrive after
+  // a pass has already read the new tab. A pin whose live tab vanished without
+  // a removal is that replacement's: a pinned tab in the same window, at the
+  // pin's address ignoring the fragment, that no pin or placeholder knows.
+  function replacementOf(state, layout, pin) {
+    const address = urlWithoutFragment(pin.url);
+    return [...layout.tabs.values()].find((tab) => tab.pinned && tab.windowId === pin.windowId
+      && !placeholderOf(tab) && !state.pins.some((other) => other.tabId === tab.id)
+      && urlWithoutFragment(tab.pendingUrl || tab.url) === address);
   }
 
   function liveTabDetails(tab) {
