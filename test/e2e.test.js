@@ -416,9 +416,10 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     await expectPinnedAreas(worker, [A, B, C], [['~a', 'b'], ['~a', '~b'], ['~a', '~b']]);
     const unloaded = await tabIdByTitle(worker, A, 'a', { placeholder: true });
     await select(worker, unloaded);
-    await waitForTitle(worker, unloaded, 'a');
+    // The placeholder carries the pin's title too, so the page is told by its
+    // address.
+    await waitFor(() => worker.run(async (id, url) => (await chrome.tabs.get(id)).url === url, unloaded, pageUrl('a')));
     await expectPinnedAreas(worker, [A, B, C], [['a', 'b'], ['~a', '~b'], ['~a', '~b']]);
-    assert.equal((await worker.run((id) => chrome.tabs.get(id), unloaded)).url, pageUrl('a'));
   });
 
   test('a pin unloaded from its live tab keeps its place among the pins', async () => {
@@ -439,7 +440,7 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     assert.equal(await liveWindowOf(worker, b), A);
     const placeholder = await tabIdByTitle(worker, C, 'b', { placeholder: true });
     await select(worker, placeholder);
-    await waitForTitle(worker, placeholder, 'b');
+    await waitFor(() => worker.run(async (id, url) => (await chrome.tabs.get(id)).url === url, placeholder, pageUrl('b')));
     await expectPinnedAreas(worker, [A, B, C], [['a', '~b'], ['~a', '~b'], ['~a', 'b']]);
   });
 
@@ -768,8 +769,15 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     await waitFor(async () => (await pinnedAreas(worker, [A, B])).every((area) => [...area].sort().join() === 'x,~x'));
     // Discarding may give the tab a new id.
     await worker.run((id) => chrome.tabs.discard(id), copy);
+    // On failure the window's tabs as the browser reports them tell which
+    // half of the condition did not hold.
     await waitFor(async () => (await layout(worker)).find((window) => window.id === B).tabs.some((tab) => tab.url.endsWith('#copy')
-      && tab.pinned) && worker.run(async (id) => (await chrome.tabs.query({ windowId: id, discarded: true })).length === 1, B));
+      && tab.pinned) && worker.run(async (id) => (await chrome.tabs.query({ windowId: id, discarded: true })).length === 1, B))
+      .catch(async (error) => {
+        const tabs = await worker.run(async (id) => (await chrome.tabs.query({ windowId: id }))
+          .map(({ id: tabId, pinned, discarded, status, url }) => ({ tabId, pinned, discarded, status, url })), B);
+        throw new Error(`${error.message}\nwindow B: ${JSON.stringify(tabs)}`);
+      });
     // B, focused last, is read first, so its copy of x is found first.
     await worker.run(() => { setTimeout(() => chrome.runtime.reload(), 0); });
     await waitFor(() => worker.run(() => false).catch(() => true));
