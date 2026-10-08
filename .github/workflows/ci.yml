@@ -4,10 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The store refuses an upload while an earlier version is in review; the
+  # daily run offers the current version again until the store has it.
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
 
 jobs:
   e2e:
     name: e2e (${{ matrix.browser }})
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -78,7 +84,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     needs: e2e
-    if: github.event_name == 'push'
+    # A scheduled run tests nothing, so it releases what main already passed.
+    if: >-
+      always() && github.event_name != 'pull_request'
+      && (needs.e2e.result == 'success' || (github.event_name == 'schedule' && needs.e2e.result == 'skipped'))
     permissions:
       contents: write
     env:
@@ -94,17 +103,24 @@ jobs:
           tag="v$(jq -r .version manifest.json)"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if gh release view "$tag" >/dev/null 2>&1; then echo "exists=true" >> "$GITHUB_OUTPUT"; fi
+          # The version the store serves, from the update check Chromium itself
+          # makes, which needs no credentials.
+          published=$(curl -sS "https://clients2.google.com/service/update2/crx?response=updatecheck&acceptformat=crx2,crx3&prodversion=140.0&x=id%3D$CWS_ITEM_ID%26uc" \
+            | grep -o '<updatecheck [^>]*>' | grep -o ' version="[^"]*"' | cut -d'"' -f2)
+          echo "published=v$published" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
+          CWS_ITEM_ID: ${{ vars.CWS_ITEM_ID }}
+      - run: node scripts/package.js
       - if: steps.version.outputs.exists != 'true'
         run: |
-          node scripts/package.js
           gh release create "${{ steps.version.outputs.tag }}" dist/*.zip --title "${{ steps.version.outputs.tag }}" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
-      # The store takes the same zip and puts it up for review. A service
-      # account signs a JWT that Google trades for an access token.
-      - if: steps.version.outputs.exists != 'true' && env.CWS_SERVICE_ACCOUNT_KEY != ''
+      # The store takes the same zip and puts it up for review, unless it
+      # already serves this version. A service account signs a JWT that Google
+      # trades for an access token.
+      - if: steps.version.outputs.published != steps.version.outputs.tag && env.CWS_SERVICE_ACCOUNT_KEY != ''
         run: |
           b64url() { openssl base64 -e -A | tr '+/' '-_' | tr -d '='; }
           key="$RUNNER_TEMP/cws-key.pem"
@@ -126,7 +142,12 @@ jobs:
             out=$(curl -sS -w '\n%{http_code}' -H "Authorization: Bearer $token" "$@")
             code=${out##*$'\n'}
             body=${out%$'\n'*}
-            if [ "$code" -ge 300 ]; then echo "::error::Chrome Web Store: $(jq -r '.error.message // .' <<<"$body")"; exit 1; fi
+            if [ "$code" -lt 300 ]; then return; fi
+            message=$(jq -r '.error.message // .' <<<"$body")
+            # An earlier upload, this version's included, is still in review;
+            # the next scheduled run offers this version again.
+            if grep -q 'in review' <<<"$message"; then echo "::notice::Chrome Web Store: $message"; exit 0; fi
+            echo "::error::Chrome Web Store: $message"; exit 1
           }
           item="https://chromewebstore.googleapis.com/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_ITEM_ID"
           upload="https://chromewebstore.googleapis.com/upload/v2/publishers/$CWS_PUBLISHER_ID/items/$CWS_ITEM_ID"
