@@ -10,7 +10,7 @@ Fields as the developer dashboard asks for them. The package is the release zip
 - Language: English
 - Store icon: icons/icon-128.png
 - Screenshots: store/screenshot-1.png, store/screenshot-2.png, store/screenshot-3.png
-- Promo video: dist/promo.mp4 from scripts/capture-store-assets.sh, uploaded to YouTube and linked here
+- Promo video: dist/promo.mp4 from `sh scripts/capture-store-assets.sh promo`, captions from store/promo-captions.json, uploaded to YouTube and linked here
 - Small promo tile: store/promo-small-440x280.png
 - Homepage: https://github.com/nanbiz/synced-pins
 - Support: https://github.com/nanbiz/synced-pins/issues

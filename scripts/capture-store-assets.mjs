@@ -1,17 +1,13 @@
-// Captures the Chrome Web Store screenshots, the README demo and the store's
-// promo video from a real headed Chromium with the extension loaded. Run it through
+// Captures the Chrome Web Store screenshots and the README demo from a real
+// headed Chromium with the extension loaded. Run it through
 // scripts/capture-store-assets.sh, which provides the tools and the Xvfb display.
-import { execFileSync, spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSandbox, launchBrowser, waitFor } from '../test/browser.js';
+import { createStage, run, sleep } from './capture-common.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const display = process.env.DISPLAY;
-if (!process.env.SYNCED_PINS_XVFB || !display) {
-  throw new Error('run this through scripts/capture-store-assets.sh, which gives the browser its own Xvfb display');
-}
 
 // The screen is exactly the store's screenshot size, holding two windows side
 // by side with an even gap around and between them. Positions are in DIPs,
@@ -43,78 +39,11 @@ const PINS = [
 const LEFT_TABS = ['https://doc.rust-lang.org/book/', 'https://docs.python.org/3/tutorial/index.html'];
 const RIGHT_TABS = ['https://nodejs.org/docs/latest/api/', 'https://www.typescriptlang.org/docs/handbook/intro.html'];
 
-// The pin the promo video navigates away from and closes, to show that
-// closing unloads a pin back to the page it was pinned at.
-const REPO = PINS[3];
-const REPO_ISSUES = `${REPO}/issues`;
-
 const screenshotPath = (n) => join(root, 'store', `screenshot-${n}.png`);
 const demoPath = join(root, 'docs', 'demo.webp');
-// The promo video is uploaded to YouTube by hand and linked from the store
-// listing, so it stays out of the repository.
-const promoPath = join(root, 'dist', 'promo.mp4');
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const run = (command, args) => execFileSync(command, args, { encoding: 'utf8' });
-const onScreen = (command, args, options = {}) => spawn(command, args, {
-  env: { ...process.env, DISPLAY: display }, ...options,
-});
-
-// A window manager gives the windows real focus changes, which the extension
-// follows, and places them where they are asked to go.
-async function startWindowManager(workDir) {
-  const ready = join(workDir, 'wm-ready');
-  const wm = onScreen('openbox', ['--startup', `sh -c 'xsetroot -solid "${DESKTOP_COLOR}" && touch ${ready}'`], {
-    stdio: 'ignore',
-  });
-  await waitFor(() => existsSync(ready), { timeout: 15_000 });
-  return wm;
-}
-
-// test/browser.js starts Chromium with the flags the test suite needs; this
-// wrapper adds the ones that keep bubbles, prompts and sound out of the shots.
-function browserWrapper(workDir) {
-  const chromium = run('sh', ['-c', 'command -v chromium']).trim();
-  const wrapper = join(workDir, 'chromium');
-  writeFileSync(wrapper, [
-    '#!/bin/sh',
-    `exec ${chromium} --mute-audio --lang=en-US --force-device-scale-factor=1 --hide-crash-restore-bubble \\`,
-    '  --disable-search-engine-choice-screen --disable-features=Translate,MediaRouter,GlobalMediaControls "$@"',
-    '',
-  ].join('\n'));
-  chmodSync(wrapper, 0o755);
-  return wrapper;
-}
-
-async function screenshot(path) {
-  mkdirSync(dirname(path), { recursive: true });
-  const raw = `${path}.raw.png`;
-  run('import', ['-display', display, '-window', 'root', raw]);
-  run('magick', [raw, '-alpha', 'off', '-define', 'png:color-type=2', path]);
-  rmSync(raw);
-  console.log(`wrote ${path}`);
-}
-
-// Moves the pointer the way a hand does: accelerating, then settling.
-let pointer = { x: SCREEN.width / 2, y: SCREEN.height / 2 };
-async function glide(x, y, duration = 700) {
-  const steps = Math.round(duration / 16);
-  const from = pointer;
-  for (let step = 1; step <= steps; step++) {
-    const t = step / steps;
-    const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
-    run('xdotool', ['mousemove', String(Math.round(from.x + (x - from.x) * eased)),
-      String(Math.round(from.y + (y - from.y) * eased))]);
-    await sleep(16);
-  }
-  pointer = { x, y };
-}
-
-async function click(x, y) {
-  await glide(x, y);
-  await sleep(250);
-  run('xdotool', ['click', '1']);
-}
+const stage = createStage({ screen: SCREEN, desktopColor: DESKTOP_COLOR });
+const { screenshot, glide, click } = stage;
 
 // The gap between the windows, where the pointer rests over the desktop and
 // raises no hover card or link highlight.
@@ -124,20 +53,6 @@ const pinnedTab = (bounds, index) => ({
   x: bounds.left + FIRST_PINNED_X + PINNED_PITCH * index,
   y: bounds.top + TAB_ROW_Y,
 });
-
-function startRecording(path) {
-  const ffmpeg = onScreen('ffmpeg', [
-    '-y', '-loglevel', 'error', '-f', 'x11grab', '-draw_mouse', '1', '-framerate', '25',
-    '-video_size', `${SCREEN.width}x${SCREEN.height}`, '-i', display,
-    '-c:v', 'libx264rgb', '-preset', 'ultrafast', '-crf', '0', path,
-  ], { stdio: ['pipe', 'inherit', 'inherit'] });
-  const exited = new Promise((resolve) => ffmpeg.once('exit', resolve));
-  return async () => {
-    ffmpeg.stdin.write('q');
-    ffmpeg.stdin.end();
-    await exited;
-  };
-}
 
 // Lossless frames: the lossy encoder leaves smudges where a changed region
 // of one frame is blended over the previous one.
@@ -155,14 +70,14 @@ async function main() {
   let wm;
   let browser;
   try {
-    wm = await startWindowManager(sandbox.root);
-    run('xdotool', ['mousemove', String(pointer.x), String(pointer.y)]);
+    wm = await stage.startWindowManager(sandbox.root);
+    run('xdotool', ['mousemove', String(stage.pointer.x), String(stage.pointer.y)]);
     mkdirSync(join(sandbox.profile, 'Default'), { recursive: true });
     writeFileSync(join(sandbox.profile, 'Default', 'Preferences'), JSON.stringify({
       intl: { accept_languages: 'en-US,en' },
       browser: { has_seen_welcome_page: true },
     }));
-    browser = await launchBrowser({ executable: browserWrapper(sandbox.root), sandbox, extensionPath: root });
+    browser = await launchBrowser({ executable: stage.browserWrapper(sandbox.root), sandbox, extensionPath: root });
     const worker = await browser.extensionWorker();
     await waitFor(() => worker.run(async () => (await chrome.storage.session.get('pins')).pins !== undefined),
       { timeout: 30_000 });
@@ -214,7 +129,7 @@ async function capture(browser, worker, workDir) {
   await screenshot(screenshotPath(1));
 
   const raw = join(workDir, 'demo.mkv');
-  const stopRecording = startRecording(raw);
+  const stopRecording = stage.startRecording(raw);
   try {
     await demo(worker, { left, right, article });
   } finally {
@@ -222,98 +137,21 @@ async function capture(browser, worker, workDir) {
   }
   encodeDemo(raw, demoPath);
 
-  const promoRaw = join(workDir, 'promo.mkv');
-  const stopPromo = startRecording(promoRaw);
-  try {
-    await promo(worker, { left, right, article });
-  } finally {
-    await stopPromo();
-  }
-  encodePromo(promoRaw, promoPath);
-}
-
-// YouTube takes H.264 in 4:2:0, which the lossless capture is converted to.
-function encodePromo(raw, path) {
-  mkdirSync(dirname(path), { recursive: true });
-  run('ffmpeg', [
-    '-y', '-loglevel', 'error', '-i', raw, '-vf', 'fps=30,format=yuv420p',
-    '-c:v', 'libx264', '-preset', 'slow', '-crf', '16', '-movflags', '+faststart', path,
-  ]);
-  console.log(`wrote ${path}`);
-}
-
-// The store's promo video: the page moving between the windows as in the
-// README demo, then pinning a tab, closing a pin, which unloads it back to the
-// page it was pinned at, and unpinning, which ends a pin everywhere.
-async function promo(worker, { left, right, article }) {
-  await sleep(2000);
-  const target = pinnedTab(RIGHT, PINS.indexOf(ARTICLE));
-  await click(target.x, target.y);
-  await waitFor(async () => await liveIn(worker, article, right) && showsPlaceholder(worker, left), { timeout: 10_000 });
-  await parkPointer();
-  await sleep(2500);
-  await click(LEFT.left + EMPTY_STRIP_X, LEFT.top + TAB_ROW_Y);
-  await waitFor(async () => await liveIn(worker, article, left) && showsPlaceholder(worker, right), { timeout: 10_000 });
-  await parkPointer();
-  await sleep(2500);
-
-  // Pinning an ordinary tab in the left window pins it in the right one too.
+  // A tab pinned in one window is pinned in the other one too.
   const book = await worker.run(async (url) => (await chrome.tabs.query({ url })).at(0).id, LEFT_TABS[0]);
   await worker.run((id) => chrome.tabs.update(id, { active: true }), book);
-  await sleep(1500);
   await worker.run((id) => chrome.tabs.update(id, { pinned: true }), book);
   await waitFor(() => pinnedCount(worker, right, PINS.length + 1), { timeout: 10_000 });
   await waitForPlaceholders(worker, right, PINS.length + 1);
-  await sleep(2500);
-  await screenshot(screenshotPath(3));
-  await sleep(500);
-
-  // The repository pin wanders off to the issues; closing it puts it back to
-  // the repository, unloaded, until it is selected again.
-  const repoTab = pinnedTab(LEFT, PINS.indexOf(REPO));
-  await click(repoTab.x, repoTab.y);
-  await sleep(1200);
-  const repo = await worker.run(async (windowId) => (await chrome.tabs.query({ windowId, active: true }))[0].id, left);
-  await worker.run((id, url) => chrome.tabs.update(id, { url }), repo, REPO_ISSUES);
-  await waitFor(() => worker.run(async (id) => {
-    const tab = await chrome.tabs.get(id);
-    return tab.status === 'complete' && /issue/i.test(tab.title);
-  }, repo), { timeout: 30_000 });
   await parkPointer();
-  await sleep(2500);
-  await glide(repoTab.x, repoTab.y);
-  await sleep(400);
-  // Chromium closes a pinned tab on the second Ctrl+W in a row.
-  run('xdotool', ['key', 'ctrl+w']);
-  await sleep(500);
-  run('xdotool', ['key', 'ctrl+w']);
-  await waitFor(() => worker.run(async (windowId, index) => {
-    const tabs = await chrome.tabs.query({ windowId, pinned: true });
-    return tabs[index]?.url.startsWith(chrome.runtime.getURL('src/placeholder.html'));
-  }, left, PINS.indexOf(REPO)), { timeout: 10_000 });
-  await parkPointer();
-  await sleep(2800);
-  await click(repoTab.x, repoTab.y);
-  await waitFor(() => worker.run(async (windowId, url) => {
-    const [tab] = await chrome.tabs.query({ windowId, active: true });
-    return tab.url === url && tab.status === 'complete';
-  }, left, REPO), { timeout: 30_000 });
-  await parkPointer();
-  await sleep(3000);
-
-  // Unpinning ends a pin in every window.
-  await worker.run((id) => chrome.tabs.update(id, { active: true }), book);
   await sleep(1500);
-  await worker.run((id) => chrome.tabs.update(id, { pinned: false }), book);
-  await waitFor(() => pinnedCount(worker, right, PINS.length), { timeout: 10_000 });
-  await sleep(3000);
+  await screenshot(screenshotPath(3));
 }
 
 function pinnedCount(worker, windowId, count) {
   return worker.run(async (windowId, count) => (await chrome.tabs.query({ windowId, pinned: true })).length === count,
     windowId, count);
 }
-
 
 async function demo(worker, { left, right, article }) {
   await sleep(2500);
