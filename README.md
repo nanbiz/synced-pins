@@ -12,7 +12,9 @@ From the [Releases](https://github.com/nanbiz/synced-pins/releases) page: unzip 
 
 ## How it behaves
 
-- Pin a tab in any window and it shows up pinned in all of them. Unpinning, closing and reordering pinned tabs work the same way from any window.
+- Pin a tab in any window and it shows up pinned in all of them. Reordering pinned tabs works the same way from any window.
+- Unpin a pinned tab in any window to remove it from all of them. Unpinning one that shows a stand-in brings its page into that window as an ordinary tab.
+- Closing a pinned tab unloads it instead of removing it, as Zen does with Essentials: it stays pinned everywhere, loads nothing, and goes back to the address it was pinned at the next time you select it. Reopening the closed tab right away (Ctrl+Shift+T) brings the page back. Chromium closes a pinned tab on the second Ctrl+W.
 - In a window where a pinned tab is not open, its place holds a stand-in page with the tab's icon and title. That is what a window shows when the tab it was showing is pulled into another window.
 - Close the window a pinned tab is open in and the tab opens again in the window you used last, at the same address.
 - Pinned tabs stay across a browser restart or crash. Any the browser does not bring back open again in the window you used last, in the same order. If the browser restores its old session afterwards, its tab takes the place of the reopened one, as long as you have not selected that one yet.
