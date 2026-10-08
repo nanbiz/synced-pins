@@ -499,8 +499,8 @@ export function createPinSync(chrome) {
   // the page it was pinned at, and its live tab shows its placeholder, which
   // loads nothing until the pin is selected again. A closed live tab is
   // replaced in its window, or, with that window gone, in the window focused
-  // last. The page it showed is kept, so reopening the closed tab undoes the
-  // unload.
+  // last, in the pin's place. The page it showed is kept, so reopening the
+  // closed tab undoes the unload.
   async function unload(state, layout, pin, windowId) {
     pin.closed ??= pageDetails(pin);
     Object.assign(pin, pin.home ?? pageDetails(pin));
@@ -515,7 +515,10 @@ export function createPinSync(chrome) {
       : state.focusOrder.find((id) => windowIds.includes(id)) ?? windowIds[0];
     pin.tabId = null;
     if (into === undefined) return;
-    const tab = await createPinned({ windowId: into, index: 0, active: false, url });
+    // Every arranged window shows the pins in list order, so the pin's place
+    // in the list is its place in the window's pinned area.
+    const index = state.pins.indexOf(pin);
+    const tab = await createPinned({ windowId: into, index, active: false, url });
     pin.tabId = tab.id;
     pin.windowId = into;
   }

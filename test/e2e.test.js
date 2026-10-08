@@ -421,6 +421,15 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     assert.equal((await worker.run((id) => chrome.tabs.get(id), unloaded)).url, pageUrl('a'));
   });
 
+  test('a pin unloaded from its live tab keeps its place among the pins', async () => {
+    const { worker } = await open();
+    const { windows: [A, B, C], b } = await threeWindowsWithPins(worker);
+    await worker.run((id) => chrome.tabs.remove(id), b);
+    await expectPinnedAreas(worker, [A, B, C], [['a', '~b'], ['~a', '~b'], ['~a', '~b']]);
+    await focus(worker, B);
+    await expectPinnedAreas(worker, [A, B, C], [['a', '~b'], ['~a', '~b'], ['~a', '~b']]);
+  });
+
   test('closing a placeholder unloads the pin everywhere, and selecting it loads it there', async () => {
     const { worker } = await open();
     const { windows: [A, B, C], b } = await threeWindowsWithPins(worker);
