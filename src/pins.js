@@ -102,6 +102,7 @@ export function createPinSync(chrome) {
     // A rebuild reads the tabs while Chromium may still be closing the old
     // version's placeholder pages; which tab a window selects is settled by
     // the events that follow, and the next pass places the pins from those.
+    if (!rebuilding) await wakeUnloaded(state, await readLayout());
     for (const summon of rebuilding ? [] : placeByPrecedence(state, await readLayout())) {
       const pin = state.pins.find((candidate) => candidate.id === summon.pinId);
       if (pin) await bringLiveTab(pin, summon.placeholderId);
@@ -135,7 +136,7 @@ export function createPinSync(chrome) {
 
   // Stores the ordered pins, without their tabs, for the next browser start.
   async function persist(pins) {
-    const list = pins.map(({ id, url, title, favIconUrl }) => ({ id, url, title, favIconUrl }));
+    const list = pins.map(({ id, url, title, favIconUrl, home }) => ({ id, url, title, favIconUrl, home }));
     persisted ??= JSON.stringify((await chrome.storage.local.get('pins')).pins ?? []);
     const json = JSON.stringify(list);
     if (json === persisted) return;
@@ -253,6 +254,11 @@ export function createPinSync(chrome) {
   // included. A pinned tab new to the pin list, neither a pin's live tab nor a
   // recorded placeholder, that stands for a pin is such a reopened tab.
   //
+  // A page at the address an unloaded pin showed when it was closed, ignoring
+  // the fragment, is that closed tab reopened, which undoes the unload: it
+  // becomes the pin's live tab again, and the tab that stood in for it is
+  // left to show the pin's placeholder.
+  //
   // A page at the address of a pin whose live tab is open, ignoring the
   // fragment, or a placeholder of a pin its window already shows is a copy of
   // that pin. The live tab keeps the page, so the copy is closed, and the
@@ -267,6 +273,7 @@ export function createPinSync(chrome) {
   // then loads its old page over any address given meanwhile, so the pin's
   // page is opened in it once it has loaded, on the update that reports it.
   async function settleReopenedTabs(state, layout) {
+    let reopenedUnloaded = false;
     const known = new Set([...state.pins.map((pin) => pin.tabId), ...Object.keys(state.placeholders).map(Number)]);
     const copies = [];
     for (const window of layout.windows) {
@@ -278,6 +285,15 @@ export function createPinSync(chrome) {
         if (described && !state.pins.some((pin) => pin.id === described.id)) {
           revive(state, pinned, tab, described);
           known.add(tab.id);
+          continue;
+        }
+        const closedFrom = !described && state.pins.find((pin) => pin.closed
+          && urlWithoutFragment(pin.closed.url) === urlWithoutFragment(tab.pendingUrl || tab.url));
+        if (closedFrom) {
+          Object.assign(closedFrom, { tabId: tab.id, ...liveTabDetails(tab) });
+          delete closedFrom.closed;
+          known.add(tab.id);
+          reopenedUnloaded = true;
           continue;
         }
         const address = urlWithoutFragment(tab.pendingUrl || tab.url);
@@ -302,7 +318,7 @@ export function createPinSync(chrome) {
       }
     }
     if (copies.length > 0) await removeTabs(copies);
-    let changed = copies.length > 0;
+    let changed = copies.length > 0 || reopenedUnloaded;
     for (const pin of state.pins.filter((candidate) => candidate.reviving)) {
       const tab = layout.tabs.get(pin.tabId);
       if (!tab) continue;
@@ -335,6 +351,7 @@ export function createPinSync(chrome) {
   // reordering, dragging a pin to another window, or the live page changing.
   function inferUserChanges(state, layout, removed) {
     const ended = new Map();
+    const unloads = new Map();
     const died = new Set();
     const unpinnedPlaceholders = [];
     for (const pin of state.pins) {
@@ -342,7 +359,7 @@ export function createPinSync(chrome) {
       if (!tab) {
         const removal = removed.get(pin.tabId);
         if (removal?.windowClosing) died.add(pin.id);
-        else if (removal) ended.set(pin.id, { closeLiveTab: false });
+        else if (removal) unloads.set(pin.id, { windowId: removal.windowId });
         continue;
       }
       pin.tabId = tab.id;
@@ -352,20 +369,23 @@ export function createPinSync(chrome) {
       }
       // A live tab still showing its own placeholder has no page to take
       // details from yet.
-      if (placeholderOf(tab)?.id !== pin.id) Object.assign(pin, liveTabDetails(tab));
+      if (placeholderOf(tab)?.id !== pin.id) {
+        Object.assign(pin, liveTabDetails(tab));
+        if (pin.home && urlWithoutFragment(pin.url) === urlWithoutFragment(pin.home.url)) pin.home = pageDetails(pin);
+      }
     }
     for (const [tabId, pinId] of Object.entries(state.placeholders)) {
       const tab = layout.tabs.get(Number(tabId));
       if (!tab) {
         const removal = removed.get(Number(tabId));
-        if (removal && !removal.windowClosing) ended.set(pinId, { closeLiveTab: true });
+        if (removal && !removal.windowClosing && !unloads.has(pinId)) unloads.set(pinId, {});
       } else if (!tab.pinned && placeholderOf(tab)?.id === pinId && !ended.has(pinId)) {
         unpinnedPlaceholders.push({ pinId, tab });
       }
     }
     adoptNewPins(state, layout);
     adoptReorder(state, layout);
-    return { ended, died, unpinnedPlaceholders };
+    return { ended, unloads, died, unpinnedPlaceholders };
   }
 
   // Unloading a tab, as Memory Saver or a hibernate command does, replaces it
@@ -389,6 +409,10 @@ export function createPinSync(chrome) {
     };
   }
 
+  function pageDetails({ url, title, favIconUrl }) {
+    return { url, title, favIconUrl };
+  }
+
   function pinIdOf(state, tab) {
     return state.pins.find((pin) => pin.tabId === tab.id)?.id ?? placeholderOf(tab)?.id;
   }
@@ -410,6 +434,7 @@ export function createPinSync(chrome) {
         }
         if (placeholderOf(tab) || !(tab.pendingUrl || tab.url) || !isSettled(tab)) continue;
         const pin = { id: newPinId(), tabId: tab.id, ...liveTabDetails(tab) };
+        pin.home = pageDetails(pin);
         const at = previousId === null ? 0 : state.pins.findIndex((candidate) => candidate.id === previousId) + 1;
         state.pins.splice(at, 0, pin);
         known.add(pin.id);
@@ -448,17 +473,17 @@ export function createPinSync(chrome) {
     }
   }
 
-  async function carryOut(state, layout, { ended, died, unpinnedPlaceholders }, summons) {
+  async function carryOut(state, layout, { ended, unloads, died, unpinnedPlaceholders }, summons) {
     for (const { pinId, tab } of unpinnedPlaceholders) {
       const pin = state.pins.find((candidate) => candidate.id === pinId);
       if (layout.tabs.has(pin.tabId)) await takeLiveTabUnpinned(pin, tab);
       ended.set(pinId, { closeLiveTab: false });
     }
-    for (const [pinId, { closeLiveTab }] of ended) {
-      const pin = state.pins.find((candidate) => candidate.id === pinId);
-      if (closeLiveTab && pin && layout.tabs.has(pin.tabId)) await removeTabs([pin.tabId]);
-    }
     state.pins = state.pins.filter((pin) => !ended.has(pin.id));
+    for (const [pinId, { windowId }] of unloads) {
+      const pin = state.pins.find((candidate) => candidate.id === pinId);
+      if (pin) await unload(state, layout, pin, windowId);
+    }
     for (const pin of state.pins.filter((candidate) => died.has(candidate.id))) {
       await resurrect(state, layout, pin);
     }
@@ -467,6 +492,64 @@ export function createPinSync(chrome) {
       const pin = state.pins.find((candidate) => candidate.id === pinId);
       if (pin) await bringLiveTab(pin, placeholderId);
     }
+  }
+
+  // Closing a pin's live tab or one of its placeholders unloads the pin
+  // rather than ending it, as Zen does with Essentials: the pin goes back to
+  // the page it was pinned at, and its live tab shows its placeholder, which
+  // loads nothing until the pin is selected again. A closed live tab is
+  // replaced in its window, or, with that window gone, in the window focused
+  // last. The page it showed is kept, so reopening the closed tab undoes the
+  // unload.
+  async function unload(state, layout, pin, windowId) {
+    pin.closed ??= pageDetails(pin);
+    Object.assign(pin, pin.home ?? pageDetails(pin));
+    const url = placeholderUrl(pageUrl, pin);
+    const live = layout.tabs.get(pin.tabId);
+    if (live) {
+      if (placeholderOf(live)?.id !== pin.id) await navigatePinned(live, url);
+      return;
+    }
+    const windowIds = layout.windows.map((window) => window.id);
+    const into = windowIds.includes(windowId) ? windowId
+      : state.focusOrder.find((id) => windowIds.includes(id)) ?? windowIds[0];
+    pin.tabId = null;
+    if (into === undefined) return;
+    const tab = await createPinned({ windowId: into, index: 0, active: false, url });
+    pin.tabId = tab.id;
+    pin.windowId = into;
+  }
+
+  // An unloaded pin loads its page again once the user selects it, its own
+  // live tab or a placeholder, in the window focused last. A window in the
+  // background may still have the pin selected from before the unload, which
+  // is no request to load it.
+  async function wakeUnloaded(state, layout) {
+    let woken = false;
+    const focused = layout.windows.find((window) => window.id === state.focusOrder[0]);
+    const tab = focused?.tabs.find((candidate) => candidate.active);
+    for (const pin of state.pins.filter((candidate) => candidate.closed)) {
+      if (!tab || (tab.id !== pin.tabId && placeholderOf(tab)?.id !== pin.id)) continue;
+      await navigatePinned(tab, pin.url);
+      Object.assign(pin, { tabId: tab.id, windowId: tab.windowId });
+      delete pin.closed;
+      woken = true;
+    }
+    return woken;
+  }
+
+  // The selected tab showing the pin, its live tab or a placeholder, in the
+  // window focused most recently among those selecting it.
+  function selectedShowing(state, layout, pin) {
+    const rank = (window) => {
+      const at = state.focusOrder.indexOf(window.id);
+      return at === -1 ? Infinity : at;
+    };
+    const [first] = layout.windows
+      .map((window) => ({ window, tab: window.tabs.find((tab) => tab.active) }))
+      .filter(({ tab }) => tab && (tab.id === pin.tabId || placeholderOf(tab)?.id === pin.id))
+      .sort((a, b) => rank(a.window) - rank(b.window));
+    return first?.tab;
   }
 
   // The live tab of a pin whose window closed died with it. Its placeholder in
@@ -490,19 +573,12 @@ export function createPinSync(chrome) {
   // focused most recently. Focus and tab selection fire events, so this runs
   // on every change without polling.
   function placeByPrecedence(state, layout) {
-    const rank = (window) => {
-      const at = state.focusOrder.indexOf(window.id);
-      return at === -1 ? Infinity : at;
-    };
     const summons = [];
+    // An unloaded pin has no page to bring, and loads where it is selected.
     for (const pin of state.pins) {
-      const live = layout.tabs.get(pin.tabId);
-      if (!live) continue;
-      const [first] = layout.windows
-        .map((window) => ({ window, tab: window.tabs.find((tab) => tab.active) }))
-        .filter(({ tab }) => tab && (tab.id === live.id || placeholderOf(tab)?.id === pin.id))
-        .sort((a, b) => rank(a.window) - rank(b.window));
-      if (first && first.tab.id !== live.id) summons.push({ pinId: pin.id, placeholderId: first.tab.id });
+      if (!layout.tabs.has(pin.tabId) || pin.closed) continue;
+      const selected = selectedShowing(state, layout, pin);
+      if (selected && selected.id !== pin.tabId) summons.push({ pinId: pin.id, placeholderId: selected.id });
     }
     return summons;
   }
@@ -677,6 +753,7 @@ export function createPinSync(chrome) {
   // until its removal event tells whether the user closed it, unless the
   // extension removed it.
   async function finish(state, arranged) {
+    for (const pin of state.pins) pin.home ??= pageDetails(pin);
     const layout = await readLayout();
     locatePins(state, layout);
     const pinIds = new Set(state.pins.map((pin) => pin.id));
@@ -784,6 +861,7 @@ export function createPinSync(chrome) {
     for (const pin of found) {
       if (stored.some((entry) => entry.id === pin.id)) match.set(pin.id, pin);
     }
+    const homeOf = (entry) => (entry.home ? { home: entry.home } : {});
     for (const pin of found.filter((candidate) => withNewId.has(candidate))) {
       const entry = stored.find((candidate) => !match.has(candidate.id) && !foundIds.has(candidate.id)
         && urlWithoutFragment(candidate.url) === urlWithoutFragment(pin.url));
@@ -795,14 +873,14 @@ export function createPinSync(chrome) {
     const ordered = [];
     for (const entry of stored) {
       if (match.has(entry.id)) {
-        ordered.push(match.get(entry.id));
+        ordered.push(Object.assign(match.get(entry.id), homeOf(entry)));
         continue;
       }
       const address = urlWithoutFragment(entry.url);
       if (addresses.has(address)) continue;
       addresses.add(address);
       ordered.push({
-        id: entry.id, url: entry.url, title: entry.title, favIconUrl: entry.favIconUrl, tabId: null, windowId: null,
+        id: entry.id, url: entry.url, title: entry.title, favIconUrl: entry.favIconUrl, ...homeOf(entry), tabId: null, windowId: null,
       });
     }
     let previous = null;
