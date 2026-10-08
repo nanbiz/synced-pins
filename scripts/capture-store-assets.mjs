@@ -1,5 +1,5 @@
-// Captures the Chrome Web Store screenshots and the README demo from a real
-// headed Chromium with the extension loaded. Run it through
+// Captures the Chrome Web Store screenshots, the README demo and the store's
+// promo video from a real headed Chromium with the extension loaded. Run it through
 // scripts/capture-store-assets.sh, which provides the tools and the Xvfb display.
 import { execFileSync, spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -43,8 +43,16 @@ const PINS = [
 const LEFT_TABS = ['https://doc.rust-lang.org/book/', 'https://docs.python.org/3/tutorial/index.html'];
 const RIGHT_TABS = ['https://nodejs.org/docs/latest/api/', 'https://www.typescriptlang.org/docs/handbook/intro.html'];
 
+// The pin the promo video navigates away from and closes, to show that
+// closing unloads a pin back to the page it was pinned at.
+const REPO = PINS[3];
+const REPO_ISSUES = `${REPO}/issues`;
+
 const screenshotPath = (n) => join(root, 'store', `screenshot-${n}.png`);
 const demoPath = join(root, 'docs', 'demo.webp');
+// The promo video is uploaded to YouTube by hand and linked from the store
+// listing, so it stays out of the repository.
+const promoPath = join(root, 'dist', 'promo.mp4');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const run = (command, args) => execFileSync(command, args, { encoding: 'utf8' });
@@ -213,7 +221,99 @@ async function capture(browser, worker, workDir) {
     await stopRecording();
   }
   encodeDemo(raw, demoPath);
+
+  const promoRaw = join(workDir, 'promo.mkv');
+  const stopPromo = startRecording(promoRaw);
+  try {
+    await promo(worker, { left, right, article });
+  } finally {
+    await stopPromo();
+  }
+  encodePromo(promoRaw, promoPath);
 }
+
+// YouTube takes H.264 in 4:2:0, which the lossless capture is converted to.
+function encodePromo(raw, path) {
+  mkdirSync(dirname(path), { recursive: true });
+  run('ffmpeg', [
+    '-y', '-loglevel', 'error', '-i', raw, '-vf', 'fps=30,format=yuv420p',
+    '-c:v', 'libx264', '-preset', 'slow', '-crf', '16', '-movflags', '+faststart', path,
+  ]);
+  console.log(`wrote ${path}`);
+}
+
+// The store's promo video: the page moving between the windows as in the
+// README demo, then pinning a tab, closing a pin, which unloads it back to the
+// page it was pinned at, and unpinning, which ends a pin everywhere.
+async function promo(worker, { left, right, article }) {
+  await sleep(2000);
+  const target = pinnedTab(RIGHT, PINS.indexOf(ARTICLE));
+  await click(target.x, target.y);
+  await waitFor(async () => await liveIn(worker, article, right) && showsPlaceholder(worker, left), { timeout: 10_000 });
+  await parkPointer();
+  await sleep(2500);
+  await click(LEFT.left + EMPTY_STRIP_X, LEFT.top + TAB_ROW_Y);
+  await waitFor(async () => await liveIn(worker, article, left) && showsPlaceholder(worker, right), { timeout: 10_000 });
+  await parkPointer();
+  await sleep(2500);
+
+  // Pinning an ordinary tab in the left window pins it in the right one too.
+  const book = await worker.run(async (url) => (await chrome.tabs.query({ url })).at(0).id, LEFT_TABS[0]);
+  await worker.run((id) => chrome.tabs.update(id, { active: true }), book);
+  await sleep(1500);
+  await worker.run((id) => chrome.tabs.update(id, { pinned: true }), book);
+  await waitFor(() => pinnedCount(worker, right, PINS.length + 1), { timeout: 10_000 });
+  await waitForPlaceholders(worker, right, PINS.length + 1);
+  await sleep(2500);
+  await screenshot(screenshotPath(3));
+  await sleep(500);
+
+  // The repository pin wanders off to the issues; closing it puts it back to
+  // the repository, unloaded, until it is selected again.
+  const repoTab = pinnedTab(LEFT, PINS.indexOf(REPO));
+  await click(repoTab.x, repoTab.y);
+  await sleep(1200);
+  const repo = await worker.run(async (windowId) => (await chrome.tabs.query({ windowId, active: true }))[0].id, left);
+  await worker.run((id, url) => chrome.tabs.update(id, { url }), repo, REPO_ISSUES);
+  await waitFor(() => worker.run(async (id) => {
+    const tab = await chrome.tabs.get(id);
+    return tab.status === 'complete' && /issue/i.test(tab.title);
+  }, repo), { timeout: 30_000 });
+  await parkPointer();
+  await sleep(2500);
+  await glide(repoTab.x, repoTab.y);
+  await sleep(400);
+  // Chromium closes a pinned tab on the second Ctrl+W in a row.
+  run('xdotool', ['key', 'ctrl+w']);
+  await sleep(500);
+  run('xdotool', ['key', 'ctrl+w']);
+  await waitFor(() => worker.run(async (windowId, index) => {
+    const tabs = await chrome.tabs.query({ windowId, pinned: true });
+    return tabs[index]?.url.startsWith(chrome.runtime.getURL('src/placeholder.html'));
+  }, left, PINS.indexOf(REPO)), { timeout: 10_000 });
+  await parkPointer();
+  await sleep(2800);
+  await click(repoTab.x, repoTab.y);
+  await waitFor(() => worker.run(async (windowId, url) => {
+    const [tab] = await chrome.tabs.query({ windowId, active: true });
+    return tab.url === url && tab.status === 'complete';
+  }, left, REPO), { timeout: 30_000 });
+  await parkPointer();
+  await sleep(3000);
+
+  // Unpinning ends a pin in every window.
+  await worker.run((id) => chrome.tabs.update(id, { active: true }), book);
+  await sleep(1500);
+  await worker.run((id) => chrome.tabs.update(id, { pinned: false }), book);
+  await waitFor(() => pinnedCount(worker, right, PINS.length), { timeout: 10_000 });
+  await sleep(3000);
+}
+
+function pinnedCount(worker, windowId, count) {
+  return worker.run(async (windowId, count) => (await chrome.tabs.query({ windowId, pinned: true })).length === count,
+    windowId, count);
+}
+
 
 async function demo(worker, { left, right, article }) {
   await sleep(2500);
@@ -240,11 +340,11 @@ async function demo(worker, { left, right, article }) {
 }
 
 // Every placeholder has picked up its pin's title and icon.
-function waitForPlaceholders(worker, windowId) {
+function waitForPlaceholders(worker, windowId, count = PINS.length) {
   return waitFor(() => worker.run(async (windowId, count) => {
     const tabs = await chrome.tabs.query({ windowId, pinned: true });
     return tabs.length === count && tabs.every((tab) => tab.status === 'complete' && tab.favIconUrl?.startsWith('https:'));
-  }, windowId, PINS.length), { timeout: 60_000 });
+  }, windowId, count), { timeout: 60_000 });
 }
 
 // Every page has loaded, carries its own title and shows its favicon.
