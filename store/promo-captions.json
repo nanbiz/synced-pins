@@ -2,7 +2,7 @@
   "intro": { "title": "Synced Pins", "subtitle": "The same pinned tabs in every window" },
   "move": { "title": "Select a pin in any window", "subtitle": "Its page moves there as it is: same scroll, nothing reloads" },
   "pin": { "title": "Pin a tab once", "subtitle": "Every window gets it" },
-  "unload": { "title": "Close a pin to unload it", "subtitle": "The pin stays, back at the page it was pinned at" },
+  "close": { "title": "Close a pinned tab, the pin stays", "subtitle": "Select it again and it opens at the page it was pinned at" },
   "unpin": { "title": "Unpin to remove it", "subtitle": "Gone from every window" },
   "outro": { "title": "Synced Pins", "subtitle": "Free and open source, for Chrome, Brave, Edge, Vivaldi and Helium" }
 }

@@ -2,10 +2,10 @@
   "manifest_version": 3,
   "name": "Synced Pins - Zen Essentials in Chrome",
   "short_name": "Synced Pins",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Shows the same pinned tabs in every window. Each pin lives in one window; selecting it in another window brings the live page there.",
-  "minimum_chrome_version": "102",
-  "permissions": ["tabs", "storage"],
+  "minimum_chrome_version": "104",
+  "permissions": ["tabs", "storage", "favicon"],
   "incognito": "not_allowed",
   "background": {
     "service_worker": "src/background.js",

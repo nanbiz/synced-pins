@@ -181,15 +181,16 @@ async function demo(worker, { left, right, article }) {
 function waitForPlaceholders(worker, windowId, count = PINS.length) {
   return waitFor(() => worker.run(async (windowId, count) => {
     const tabs = await chrome.tabs.query({ windowId, pinned: true });
-    return tabs.length === count && tabs.every((tab) => tab.status === 'complete' && tab.favIconUrl?.startsWith('https:'));
+    return tabs.length === count && tabs.every((tab) => tab.status === 'complete' && tab.favIconUrl);
   }, windowId, count), { timeout: 60_000 });
 }
 
-// Every page has loaded, carries its own title and shows its favicon.
+// Every page has loaded, carries its own title and shows its favicon, a
+// placeholder the one from the browser's favicon store.
 function waitForPages(worker) {
   return waitFor(() => worker.run(async () => {
     const tabs = await chrome.tabs.query({});
-    return tabs.every((tab) => tab.status === 'complete' && tab.favIconUrl?.startsWith('https:')
+    return tabs.every((tab) => tab.status === 'complete' && /^(https|chrome-extension):/.test(tab.favIconUrl ?? '')
       && !(tab.url.startsWith('https:') && tab.url.includes(tab.title)));
   }), { timeout: 60_000, interval: 250 });
 }

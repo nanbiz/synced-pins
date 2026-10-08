@@ -3,19 +3,40 @@ import { placeholderUrl, readPlaceholderUrl } from './placeholder-url.js';
 const pageUrl = chrome.runtime.getURL('src/placeholder.html');
 const fromUrl = readPlaceholderUrl(pageUrl, location.href);
 
+// The browser's own store of site icons, for the icon of a page. For an
+// address it holds no icon for it answers with the icon of the site, and for
+// an unknown site with the browser's default.
+function storedIcon(url) {
+  return chrome.runtime.getURL(`/_favicon/?${new URLSearchParams({ pageUrl: url, size: 64 })}`);
+}
+
+// The site's own icon where it may be loaded here, else the stored one: a site
+// may allow only its own pages to load its icon, as claude.ai does with
+// Cross-Origin-Resource-Policy: same-origin, and the store learns the icon of
+// a page only some time after the page first shows it.
+let iconRequest = 0;
+function showIcon(pin) {
+  const request = ++iconRequest;
+  const use = (src) => {
+    if (request !== iconRequest) return;
+    document.getElementById('icon').src = src;
+    document.getElementById('favicon').href = src;
+  };
+  if (!pin.favIconUrl) {
+    use(storedIcon(pin.url));
+    return;
+  }
+  const probe = new Image();
+  probe.onload = () => use(pin.favIconUrl);
+  probe.onerror = () => use(storedIcon(pin.url));
+  probe.src = pin.favIconUrl;
+}
+
 function show(pin) {
   const title = pin.title || pin.url;
   document.title = title;
   document.getElementById('title').textContent = title;
-  const icon = document.getElementById('icon');
-  const favicon = document.getElementById('favicon');
-  icon.hidden = !pin.favIconUrl;
-  if (pin.favIconUrl) {
-    icon.src = pin.favIconUrl;
-    favicon.href = pin.favIconUrl;
-  } else {
-    favicon.removeAttribute('href');
-  }
+  showIcon(pin);
   const url = placeholderUrl(pageUrl, pin);
   if (url !== location.href) history.replaceState(null, '', url);
 }

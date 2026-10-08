@@ -205,7 +205,7 @@ async function record(worker, { top, bottom, article }) {
   highlight(...Object.values(pinnedArea(BOTTOM, PINS.length + 1)), 1.8);
   await sleep(2000);
 
-  showCaption('unload');
+  showCaption('close');
   const repoTab = pinnedTab(TOP, PINS.indexOf(REPO));
   await click(repoTab.x, repoTab.y, { duration: 500 });
   await sleep(1100);
@@ -384,11 +384,12 @@ function pinnedCount(worker, windowId, count) {
     windowId, count);
 }
 
-// Every page has loaded, carries its own title and shows its favicon.
+// Every page has loaded, carries its own title and shows its favicon, a
+// placeholder the one from the browser's favicon store.
 function waitForPages(worker) {
   return waitFor(() => worker.run(async () => {
     const tabs = await chrome.tabs.query({});
-    return tabs.every((tab) => tab.status === 'complete' && tab.favIconUrl?.startsWith('https:')
+    return tabs.every((tab) => tab.status === 'complete' && /^(https|chrome-extension):/.test(tab.favIconUrl ?? '')
       && !(tab.url.startsWith('https:') && tab.url.includes(tab.title)));
   }), { timeout: 60_000, interval: 250 });
 }

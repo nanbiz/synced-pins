@@ -16,10 +16,19 @@ const skip = executable ? false : 'no browser: set CHROME_PATH or put chromium o
 const STARTUP_TIMEOUT_MS = 30_000;
 
 // The pages pinned in the tests: every path is a page titled after itself.
+// A page whose name starts with "iconic" has an icon that, as on claude.ai,
+// only the site's own pages may load.
+const ICON = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR4nGO4o6FBEmIY1TCqYfhqAAAyBCwQhvh37QAAAABJRU5ErkJggg==', 'base64');
 const server = createServer((request, response) => {
   const name = decodeURIComponent(new URL(request.url, 'http://localhost').pathname.slice(1));
+  if (name === 'icon.png') {
+    response.writeHead(200, { 'content-type': 'image/png', 'cross-origin-resource-policy': 'same-origin' });
+    response.end(ICON);
+    return;
+  }
+  const icon = name.startsWith('iconic') ? '<link rel="icon" href="/icon.png">' : '';
   response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-  response.end(`<!doctype html><title>${name}</title><h1>${name}</h1>`);
+  response.end(`<!doctype html><title>${name}</title>${icon}<h1>${name}</h1>`);
 });
 let origin;
 before(async () => {
@@ -729,6 +738,32 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     const tab = await worker.run((id) => chrome.tabs.get(id), a);
     assert.equal(tab.windowId, B);
     assert.equal(tab.active, true);
+  });
+
+  test('a placeholder shows the icon of its pin even where the site lets only its own pages load it', async () => {
+    const { worker, browser } = await open();
+    const A = await createWindow(worker, 'A');
+    const B = await createWindow(worker, 'B');
+    const live = await openTab(worker, A, 'iconic', { pinned: true, active: false });
+    await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).favIconUrl?.endsWith('/icon.png'), live));
+    await expectPinnedAreas(worker, [A, B], [['iconic'], ['~iconic']]);
+    const placeholder = await tabIdByTitle(worker, B, 'iconic', { placeholder: true });
+    const page = await placeholderPage(browser, placeholder);
+    // The browser's default icon, which an unknown site gets, differs from
+    // the pin's own.
+    const shown = await page.run(async (unknown) => {
+      const bytes = async (url) => [...new Uint8Array(await (await fetch(url)).arrayBuffer())].join();
+      const src = document.getElementById('icon').src;
+      const width = await new Promise((resolve) => {
+        const image = new Image();
+        image.onload = () => resolve(image.naturalWidth);
+        image.onerror = () => resolve(0);
+        image.src = src;
+      });
+      const fallback = chrome.runtime.getURL(`/_favicon/?${new URLSearchParams({ pageUrl: unknown, size: 64 })}`);
+      return { loads: width > 0, own: (await bytes(src)) !== (await bytes(fallback)) };
+    }, 'https://unknown.invalid/');
+    assert.deepEqual(shown, { loads: true, own: true });
   });
 
   test('a pin the browser unloaded stays unloaded until it is selected', async () => {

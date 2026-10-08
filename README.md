@@ -14,7 +14,7 @@ From the [Releases](https://github.com/nanbiz/synced-pins/releases) page: unzip 
 
 - Pin a tab in any window and it shows up pinned in all of them. Reordering pinned tabs works the same way from any window.
 - Unpin a pinned tab in any window to remove it from all of them. Unpinning one that shows a stand-in brings its page into that window as an ordinary tab.
-- Closing a pinned tab unloads it instead of removing it, as Zen does with Essentials: it stays pinned everywhere, loads nothing, and goes back to the address it was pinned at the next time you select it. Reopening the closed tab right away (Ctrl+Shift+T) brings the page back. Chromium closes a pinned tab on the second Ctrl+W.
+- Closing a pinned tab closes its page, but the pin stays, as Zen does with Essentials: every window keeps showing it, and the next time you select it, it opens at the address it was pinned at. Reopening the closed tab right away (Ctrl+Shift+T) brings the page back. Chromium closes a pinned tab on the second Ctrl+W.
 - In a window where a pinned tab is not open, its place holds a stand-in page with the tab's icon and title. That is what a window shows when the tab it was showing is pulled into another window.
 - Close the window a pinned tab is open in and the tab opens again in the window you used last, at the same address.
 - Pinned tabs stay across a browser restart or crash. Any the browser does not bring back open again in the window you used last, in the same order. If the browser restores its old session afterwards, its tab takes the place of the reopened one, as long as you have not selected that one yet.
@@ -22,7 +22,7 @@ From the [Releases](https://github.com/nanbiz/synced-pins/releases) page: unzip 
 
 ## Permissions
 
-`tabs` lets the extension read the address, title and icon of your pinned tabs, which it needs to draw them in your other windows. Chrome describes this permission as "Read your browsing history". `storage` keeps the list of pinned tabs while the browser runs and across restarts. Nothing is sent anywhere; see [PRIVACY.md](PRIVACY.md).
+`tabs` lets the extension read the address, title and icon of your pinned tabs, which it needs to draw them in your other windows. Chrome describes this permission as "Read your browsing history". `storage` keeps the list of pinned tabs while the browser runs and across restarts. `favicon` lets the stand-in pages take a pinned site's icon from the browser's own store of site icons where the site lets only its own pages load it; Chrome describes it as "Read the icons of the websites you visit". Nothing is sent anywhere; see [PRIVACY.md](PRIVACY.md).
 
 ## Develop
 
