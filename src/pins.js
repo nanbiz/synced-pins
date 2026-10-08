@@ -88,7 +88,7 @@ export function createPinSync(chrome) {
     // Every tab of a rebuilt list is new to it, so none is told apart as
     // reopened.
     if (!rebuilding) {
-      if (await settleReopenedTabs(state, layout)) layout = await readMergedLayout(state);
+      if (await settleReopenedTabs(state, layout, removed)) layout = await readMergedLayout(state);
       settled = new Set([...layout.tabs.values()].filter((tab) => tab.pinned).map((tab) => tab.id));
     }
     const actions = inferUserChanges(state, layout, removed);
@@ -272,7 +272,7 @@ export function createPinSync(chrome) {
   // and becomes its live tab. Vivaldi brings a reopened tab back unloaded and
   // then loads its old page over any address given meanwhile, so the pin's
   // page is opened in it once it has loaded, on the update that reports it.
-  async function settleReopenedTabs(state, layout) {
+  async function settleReopenedTabs(state, layout, removed) {
     let reopenedUnloaded = false;
     const known = new Set([...state.pins.map((pin) => pin.tabId), ...Object.keys(state.placeholders).map(Number)]);
     const copies = [];
@@ -287,6 +287,9 @@ export function createPinSync(chrome) {
           known.add(tab.id);
           continue;
         }
+        // A pin's tab the browser unloaded under a new id, whose replacement
+        // event has not arrived yet, is that pin's still.
+        if (!described && replacedTabOwner(state, layout, removed, tab)) continue;
         const closedFrom = !described && state.pins.find((pin) => pin.closed
           && urlWithoutFragment(pin.closed.url) === urlWithoutFragment(tab.pendingUrl || tab.url));
         if (closedFrom) {
@@ -393,6 +396,11 @@ export function createPinSync(chrome) {
   // a pass has already read the new tab. A pin whose live tab vanished without
   // a removal is that replacement's: a pinned tab in the same window, at the
   // pin's address ignoring the fragment, that no pin or placeholder knows.
+  function replacedTabOwner(state, layout, removed, tab) {
+    return state.pins.find((pin) => !layout.tabs.has(pin.tabId) && !removed.has(pin.tabId)
+      && replacementOf(state, layout, pin) === tab);
+  }
+
   function replacementOf(state, layout, pin) {
     const address = urlWithoutFragment(pin.url);
     return [...layout.tabs.values()].find((tab) => tab.pinned && tab.windowId === pin.windowId

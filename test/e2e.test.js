@@ -539,7 +539,15 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
       const orders = new Set(areas.map((area) => area.map((title) => title.replace('~', '')).join()));
       return live.length === 3 && new Set(live).size === 3 && orders.size === 1
         && [...orders][0].split(',').sort().join() === 'x,y,z';
-    }).catch(() => assert.fail(`pinned areas after install: ${JSON.stringify(areas)}`));
+    }).catch(async () => {
+      // The pin list tells a pin dropped from the list from one the windows
+      // only fail to show.
+      const pins = await synced.run(async () => ({
+        session: (await chrome.storage.session.get('pins')).pins?.map(({ title, url, tabId, closed }) => ({ title, url, tabId, closed: !!closed })),
+        stored: (await chrome.storage.local.get('pins')).pins?.map(({ title, url }) => ({ title, url })),
+      }));
+      assert.fail(`pinned areas after install: ${JSON.stringify(areas)}\npins: ${JSON.stringify(pins)}`);
+    });
   });
 
   test('a restart on the same profile restores every pin once', async () => {
