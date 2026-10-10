@@ -415,6 +415,23 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     assert.equal(tab.index, 1);
   });
 
+  test('putting the live tab into a tab group lets the page go with it and keeps the pin', async () => {
+    const { worker } = await open();
+    const { windows: [A, B, C], a } = await threeWindowsWithPins(worker);
+    await worker.run((id, url) => chrome.tabs.update(id, { url }), a, pageUrl('a2'));
+    await expectPinnedAreas(worker, [A, B, C], [['a2', 'b'], ['~a2', '~b'], ['~a2', '~b']]);
+    await focus(worker, A);
+    await worker.run((id) => chrome.tabs.group({ tabIds: [id] }), a);
+    await expectPinnedAreas(worker, [A, B, C], [['~a', 'b'], ['~a', '~b'], ['~a', '~b']]);
+    const grouped = await worker.run((id) => chrome.tabs.get(id), a);
+    assert.equal(grouped.windowId, A);
+    assert.equal(grouped.pinned, false);
+    assert.notEqual(grouped.groupId, -1);
+    assert.equal(grouped.url, pageUrl('a2'));
+    await worker.run((id) => chrome.tabs.update(id, { pinned: true }), a);
+    await expectPinnedAreas(worker, [A, B, C], [['a2', 'b'], ['~a2', '~b'], ['~a2', '~b']]);
+  });
+
   test('closing the live tab unloads the pin, which loads the page it was pinned at when selected', async () => {
     const { worker } = await open();
     const { windows: [A, B, C], a } = await threeWindowsWithPins(worker);

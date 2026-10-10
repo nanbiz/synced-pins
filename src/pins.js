@@ -4,6 +4,9 @@ import { placeholderUrl, readPlaceholderUrl } from './placeholder-url.js';
 // moments, so edits are retried after these pauses before giving up.
 const TAB_STRIP_BUSY = 'Tabs cannot be edited right now';
 const BUSY_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1600];
+// chrome.tabGroups.TAB_GROUP_ID_NONE, without the tabGroups permission that
+// API needs.
+const NO_TAB_GROUP = -1;
 
 // Reloading the extension, which reports the install reason "update", makes
 // Chromium close the old version's pages, except that a window's last tab is
@@ -363,6 +366,15 @@ export function createPinSync(chrome) {
         const removal = removed.get(pin.tabId);
         if (removal?.windowClosing) died.add(pin.id);
         else if (removal) unloads.set(pin.id, { windowId: removal.windowId });
+        continue;
+      }
+      if (!tab.pinned && tab.groupId !== undefined && tab.groupId !== NO_TAB_GROUP) {
+        // Chromium unpins a tab it puts into a tab group, as when the user
+        // adds it to one or another extension, such as Claude, groups the
+        // tab it works in. The page goes with the group and the pin stays,
+        // closed, as if its tab had been closed.
+        pin.tabId = null;
+        unloads.set(pin.id, { windowId: tab.windowId });
         continue;
       }
       pin.tabId = tab.id;
