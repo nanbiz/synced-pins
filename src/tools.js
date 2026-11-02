@@ -64,8 +64,10 @@ export async function toggleOverlay(tab) {
     const query = new URLSearchParams({ mode: 'frame', tab: tab.id, window: tab.windowId }).toString();
     await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: toggleInPage, args: [overlayPath, query] });
     return;
-  } catch {
-    // The page cannot host it.
+  } catch (error) {
+    // The page cannot host it; the reason stays for the session, for finding
+    // out why on a page where it should have.
+    await chrome.storage.session.set({ overlayFallback: { reason: String(error?.message ?? error), url: tab.url ?? '', at: Date.now() } });
   }
   try {
     await openOverlayPopup(tab);

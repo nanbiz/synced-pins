@@ -895,8 +895,10 @@ async function overlayFrame(browser) {
   const target = await waitFor(async () => (await browser.targets()).find(
     (info) => info.type === 'iframe' && info.url.includes('/src/overlay.html'),
   )).catch(async (error) => {
-    const targets = (await browser.targets()).map((info) => `${info.type} ${info.url.slice(0, 90)}`);
-    throw new Error(`${error.message}\ntargets: ${JSON.stringify(targets)}`);
+    const targets = (await browser.targets()).filter((info) => info.type === 'page' || info.type === 'iframe')
+      .map((info) => `${info.type} ${info.url.slice(0, 90)}`);
+    const fallback = await current.worker.run(async () => (await chrome.storage.session.get('overlayFallback')).overlayFallback ?? null);
+    throw new Error(`${error.message}\nfallback: ${JSON.stringify(fallback)}\ntargets: ${JSON.stringify(targets)}`);
   });
   const frame = await browser.attach(target.targetId);
   await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, frame.sessionId);
@@ -1057,7 +1059,8 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     const B = await createWindow(worker, 'B');
     const [{ id }] = await tabsIn(worker, B);
     await worker.run((tabId) => chrome.tabs.update(tabId, { url: 'chrome://version' }), id);
-    const version = await browser.page((url) => url.startsWith('chrome://version'));
+    // Edge shows chrome://version as edge://version.
+    const version = await browser.page((url) => /^[a-z]+:\/\/version/.test(url));
     await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, version.sessionId);
     // Vivaldi opens no extension popup on request.
     const mode = /vivaldi/i.test(executable ?? '') ? 'tab' : 'popup';
@@ -1085,6 +1088,8 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
         && tabs.some((tab) => tab.active && !tab.pinned && tab.url.includes('/src/overlay.html?mode=tab'));
     });
     // An address picked there opens in that same tab.
+    // Vivaldi leaves a page that is attached to while it loads unanswered.
+    await waitFor(() => worker.run(async (id) => (await chrome.tabs.query({ windowId: id, active: true }))[0]?.status === 'complete', B));
     const page = await browser.page((url) => url.includes('/src/overlay.html?mode=tab'));
     await waitFor(() => page.run(() => document.activeElement?.id === 'query'));
     await typeInto(page, pageUrl('there').replace('http://', ''));
