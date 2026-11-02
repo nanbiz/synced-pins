@@ -67,7 +67,18 @@ export async function toggleOverlay(tab) {
   } catch (error) {
     // The page cannot host it; the reason stays for the session, for finding
     // out why on a page where it should have.
-    await chrome.storage.session.set({ overlayFallback: { reason: String(error?.message ?? error), url: tab.url ?? '', at: Date.now() } });
+    const focused = await chrome.windows.getLastFocused({ populate: true }).catch(() => null);
+    await chrome.storage.session.set({
+      overlayFallback: {
+        reason: String(error?.message ?? error),
+        url: tab.url ?? '',
+        tabId: tab.id,
+        windowId: tab.windowId,
+        focusedWindowId: focused?.id ?? null,
+        focusedTabId: focused?.tabs?.find((other) => other.active)?.id ?? null,
+        at: Date.now(),
+      },
+    });
   }
   try {
     await openOverlayPopup(tab);
