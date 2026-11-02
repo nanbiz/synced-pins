@@ -765,6 +765,28 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     assert.equal(tab.active, true);
   });
 
+  test('the trace records pinning, copies and moves by id, without any address', async () => {
+    const { worker } = await open();
+    const { windows: [, B], a } = await threeWindowsWithPins(worker);
+    await focus(worker, B);
+    const copy = await openTab(worker, B, 'a', { active: true });
+    await waitForTitle(worker, copy, 'a');
+    await worker.run((id) => chrome.tabs.update(id, { pinned: true }), copy);
+    let trace;
+    await waitFor(async () => {
+      trace = await worker.run(async () => (await chrome.storage.local.get('trace')).trace ?? []);
+      return trace.flatMap((entry) => entry.decisions).some((decision) => decision.brought);
+    }).catch(() => assert.fail(`trace: ${JSON.stringify(trace)}`));
+    const decisions = trace.flatMap((entry) => entry.decisions);
+    const pins = await worker.run(async () => (await chrome.storage.session.get('pins')).pins);
+    const pinA = pins.find((pin) => pin.tabId === a).id;
+    assert.ok(decisions.some((decision) => decision.adopted === pinA && decision.tabId === a));
+    assert.ok(decisions.some((decision) => decision.copy === copy && decision.of === pinA));
+    assert.ok(decisions.some((decision) => decision.brought === pinA && decision.live === a && decision.to === B));
+    assert.ok(trace.some((entry) => entry.hints.some((hint) => hint.type === 'activated')));
+    assert.doesNotMatch(JSON.stringify(trace), /127\.0\.0\.1|https?:/);
+  });
+
   test('a placeholder shows the icon of its pin even where the site lets only its own pages load it', async () => {
     const { worker, browser } = await open();
     const A = await createWindow(worker, 'A');
