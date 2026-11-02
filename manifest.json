@@ -4,13 +4,46 @@
   "short_name": "Synced Pins",
   "version": "1.0.10",
   "description": "Shows the same pinned tabs in every window. Each pin lives in one window; selecting it in another window brings the live page there.",
-  "minimum_chrome_version": "104",
-  "permissions": ["tabs", "storage", "favicon"],
+  "minimum_chrome_version": "127",
+  "permissions": [
+    "tabs",
+    "storage",
+    "favicon",
+    "activeTab",
+    "scripting",
+    "search"
+  ],
   "incognito": "not_allowed",
   "background": {
     "service_worker": "src/background.js",
     "type": "module"
   },
+  "action": {
+    "default_title": "Close the other tabs",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "commands": {
+    "open-overlay": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+K"
+      },
+      "description": "Open a new tab"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/overlay.html"
+      ],
+      "matches": [
+        "<all_urls>"
+      ],
+      "use_dynamic_url": true
+    }
+  ],
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",

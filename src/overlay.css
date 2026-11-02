@@ -1,0 +1,176 @@
+:root {
+  --surface: #fafafa;
+  --text: #27272a;
+  --muted: #71717a;
+  --line: #e4e4e7;
+  --selected: #3b6fd6;
+  --shadow: 0 16px 60px rgb(0 0 0 / 0.28);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #1f1f23;
+    --text: #e4e4e7;
+    --muted: #8b8b93;
+    --line: #34343a;
+    --selected: #4a7be0;
+  }
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  color: var(--text);
+  font: 15px system-ui, sans-serif;
+}
+
+/* Over a page the overlay sits centred a little above the middle, as Zen's
+   address bar does; in the toolbar popup or a tab of its own it fills the
+   space it has. */
+body.frame {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+body.frame #box {
+  margin-top: max(24px, calc(50vh - 180px));
+  width: min(66.6vw, 750px);
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  box-shadow: var(--shadow);
+}
+
+body.popup {
+  width: 560px;
+}
+
+body.tab {
+  background: var(--surface);
+}
+
+body.tab #box {
+  width: min(66.6vw, 750px);
+  margin: max(24px, calc(50vh - 180px)) auto 0;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+}
+
+#box {
+  background: var(--surface);
+  overflow: hidden;
+}
+
+#query {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 16px 18px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 1.15em;
+}
+
+#pins:not(:empty),
+#results:not(:empty) {
+  border-top: 1px solid var(--line);
+}
+
+#pins {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 10px 12px;
+}
+
+#pins:empty,
+#results:empty {
+  display: none;
+}
+
+.pin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 76px;
+  padding: 8px 4px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font: 12px system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.pin span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pin img {
+  width: 24px;
+  height: 24px;
+}
+
+.pin.selected {
+  background: var(--selected);
+  color: #fff;
+}
+
+#results {
+  max-height: 360px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 6px 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 45px;
+  padding: 0 18px;
+  cursor: pointer;
+}
+
+.row img {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.row .title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row .kind {
+  color: var(--muted);
+  font-size: 0.93em;
+  opacity: 0.7;
+}
+
+.row.selected {
+  background: var(--selected);
+  color: #fff;
+}
+
+/* The extension's own grey glyphs turn white on the selected row; site icons
+   keep their colours. */
+.row.selected img.glyph {
+  filter: brightness(0) invert(1);
+}
+
+.row.selected .kind {
+  color: #fff;
+  opacity: 1;
+}
