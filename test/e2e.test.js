@@ -932,6 +932,10 @@ async function pressOverlayShortcut(browser, name) {
     await waitFor(() => current.worker.run(async (id) => (await chrome.windows.getLastFocused()).id === id, windowId));
   }
   const page = await browser.page(pageUrl(name));
+  // The shortcut grants the extension the selected tab of the browser's
+  // active window; without a window manager that need not be the window the
+  // key goes to, so the page's window is made the active one.
+  await current.browser.connection.send('Page.bringToFront', {}, page.sessionId);
   await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, page.sessionId);
   for (let attempt = 1; ; attempt++) {
     await pressShortcut(page);
