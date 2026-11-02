@@ -822,8 +822,10 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     const placeholder = await tabIdByTitle(worker, B, 'iconic', { placeholder: true });
     const page = await placeholderPage(browser, placeholder);
     // The browser's default icon, which an unknown site gets, differs from
-    // the pin's own.
-    const shown = await page.run(async (unknown) => {
+    // the pin's own. The page first tries whether the site's icon loads, and
+    // shows an icon only once it knows which.
+    let shown;
+    const read = () => page.run(async (unknown) => {
       const bytes = async (url) => [...new Uint8Array(await (await fetch(url)).arrayBuffer())].join();
       const src = document.getElementById('icon').src;
       const width = await new Promise((resolve) => {
@@ -833,9 +835,13 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
         image.src = src;
       });
       const fallback = chrome.runtime.getURL(`/_favicon/?${new URLSearchParams({ pageUrl: unknown, size: 64 })}`);
+      if (!src) return { loads: false, own: false };
       return { loads: width > 0, own: (await bytes(src)) !== (await bytes(fallback)) };
     }, 'https://unknown.invalid/');
-    assert.deepEqual(shown, { loads: true, own: true });
+    await waitFor(async () => {
+      shown = await read();
+      return shown.loads && shown.own;
+    }).catch(() => assert.deepEqual(shown, { loads: true, own: true }));
   });
 
   test('a pin the browser unloaded stays unloaded until it is selected', async () => {
