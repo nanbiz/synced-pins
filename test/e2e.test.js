@@ -957,9 +957,17 @@ async function pressOverlayShortcut(browser, name) {
     await pressShortcut(page);
     try {
       await waitFor(() => overlayOpen(browser), { timeout: 8_000 });
-      const inTab = (await browser.targets()).some((info) => info.url.includes('/src/overlay.html?mode=tab'));
-      if (inTab && /vivaldi/i.test(executable ?? '')) {
+      const targets = await browser.targets();
+      const inPage = targets.some((info) => info.type === 'iframe' && info.url.includes('/src/overlay.html'));
+      const inTab = targets.some((info) => info.url.includes('/src/overlay.html?mode=tab'));
+      if (!inPage && inTab && /vivaldi/i.test(executable ?? '')) {
         throw new NoOverlayInPage('Vivaldi gave the shortcut no access to the page, so the overlay opened as a tab');
+      }
+      // Now and then on the CI runners the shortcut grants no access to the
+      // page and the overlay falls back to the popup; that try counts as lost.
+      if (!inPage && attempt < 3 && targets.some((info) => info.url.includes('/src/overlay.html?mode=popup'))) {
+        await current.browser.connection.send('Page.bringToFront', {}, page.sessionId);
+        continue;
       }
       return overlayFrame(browser);
     } catch (error) {
@@ -1135,6 +1143,13 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     // The extension is kept out of private windows and cannot see them, so
     // the new window is looked for as a page in a browser context of its own.
     const main = (await browser.targets()).find((info) => info.type === 'page' && info.url === pageUrl('A')).browserContextId;
-    await waitFor(async () => (await browser.targets()).some((info) => info.type === 'page' && info.browserContextId !== main));
+    let privatePage;
+    await waitFor(async () => {
+      privatePage = (await browser.targets()).find((info) => info.type === 'page' && info.browserContextId !== main);
+      return privatePage;
+    });
+    // Vivaldi keeps the test run alive after its kill while a private window
+    // is left open.
+    await current.browser.connection.send('Target.closeTarget', { targetId: privatePage.targetId });
   });
 });
