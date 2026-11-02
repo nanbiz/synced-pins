@@ -2,10 +2,31 @@ import { createPinSync } from './pins.js';
 import { closeTabs, showClosableCount, toggleOverlay } from './tools.js';
 
 const sync = createPinSync(chrome);
+
+// The welcome page opens on install and on the update from a version before
+// the overlay, the one change a user has to be told about.
+const WELCOME_SINCE = '1.1.0';
+
+function olderThan(version, than) {
+  const parts = (text) => (text ?? '0').split('.').map(Number);
+  const [a, b] = [parts(version), parts(than)];
+  for (let index = 0; index < Math.max(a.length, b.length); index++) {
+    if ((a[index] ?? 0) !== (b[index] ?? 0)) return (a[index] ?? 0) < (b[index] ?? 0);
+  }
+  return false;
+}
+
+async function showWelcome() {
+  await chrome.tabs.create({ url: chrome.runtime.getURL('src/welcome.html') }).catch(() => {});
+  await chrome.storage.session.set({ welcomeShown: true });
+}
 const normalWindows = { windowTypes: ['normal'] };
 const layoutChanged = () => sync.note({ type: 'layout' });
 
-chrome.runtime.onInstalled.addListener(({ reason }) => sync.note({ type: 'installed', reason }));
+chrome.runtime.onInstalled.addListener(({ reason, previousVersion }) => {
+  sync.note({ type: 'installed', reason });
+  if (reason === 'install' || (reason === 'update' && olderThan(previousVersion, WELCOME_SINCE))) showWelcome();
+});
 chrome.runtime.onStartup.addListener(layoutChanged);
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (message === 'summon' && sender.tab) sync.note({ type: 'summon', tabId: sender.tab.id, windowId: sender.tab.windowId });

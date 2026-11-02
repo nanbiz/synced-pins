@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Synced Pins - Zen Essentials in Chrome",
-  "short_name": "Synced Pins",
-  "version": "1.0.10",
-  "description": "Shows the same pinned tabs in every window. Each pin lives in one window; selecting it in another window brings the live page there.",
+  "name": "Zen Essentials in Chrome",
+  "short_name": "Zen Essentials",
+  "version": "1.1.0",
+  "description": "Pinned tabs shared by every window, a new tab overlay that opens nothing until you pick, and one click to clear the other tabs.",
   "minimum_chrome_version": "127",
   "permissions": [
     "tabs",

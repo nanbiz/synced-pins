@@ -44,7 +44,7 @@ const pageUrl = (name) => `${origin}/${name}`;
 // chrome.runtime.reload(). On restart the profile reopens its last session
 // when restoreSession is set and otherwise follows Chromium's default of
 // opening a New Tab page.
-async function start({ restoreSession = false, sandbox, extension = extensionPath } = {}) {
+async function start({ restoreSession = false, sandbox, extension = extensionPath, installing = !sandbox, keepWelcome = false } = {}) {
   const fresh = !sandbox;
   if (fresh) {
     sandbox = await createSandbox();
@@ -65,12 +65,25 @@ async function start({ restoreSession = false, sandbox, extension = extensionPat
     const worker = extension === extensionPath
       ? await readyWorker(browser)
       : await browser.extensionWorker();
+    if (extension === extensionPath && installing && !keepWelcome) await closeWelcome(worker);
     return { sandbox, browser, worker };
   } catch (error) {
     await browser?.kill();
     if (fresh) await sandbox.remove();
     throw error;
   }
+}
+
+// The welcome page the extension opens when it is installed, closed so the
+// windows hold only what a test opens.
+async function closeWelcome(worker) {
+  await waitFor(() => worker.run(async () => (await chrome.storage.session.get('welcomeShown')).welcomeShown === true),
+    { timeout: STARTUP_TIMEOUT_MS });
+  await worker.run(async () => {
+    const welcome = chrome.runtime.getURL('src/welcome.html');
+    const tabs = (await chrome.tabs.query({})).filter((tab) => (tab.pendingUrl || tab.url).startsWith(welcome));
+    if (tabs.length > 0) await chrome.tabs.remove(tabs.map((tab) => tab.id));
+  });
 }
 
 // The extension's worker once it has built its pin list. After a reload the
@@ -548,7 +561,7 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
       await pin(second.id, z);
     }, pageUrl('x'), pageUrl('y'), pageUrl('z'));
     await waitFor(async () => (await current.browser.targets()).filter((target) => target.title === 'x').length === 2);
-    const { worker: synced } = await restart({ extension: extensionPath });
+    const { worker: synced } = await restart({ extension: extensionPath, installing: true });
     let areas;
     await waitFor(async () => {
       areas = (await layout(synced)).map(pinnedArea);
@@ -1151,5 +1164,12 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     // Vivaldi keeps the test run alive after its kill while a private window
     // is left open.
     await current.browser.connection.send('Target.closeTarget', { targetId: privatePage.targetId });
+  });
+
+  test('installing opens the welcome page, which shows the overlay\'s shortcut', async () => {
+    const { browser } = await open({ keepWelcome: true });
+    const page = await browser.page((url) => url.includes('/src/welcome.html'));
+    await waitFor(async () => (await page.run(() => document.getElementById('shortcut').textContent)) === 'Ctrl + Shift + Space');
+    assert.equal(await page.run(() => document.getElementById('ctrl-t').hidden), false);
   });
 });
