@@ -4,7 +4,8 @@
 # events, so the focus-dependent behaviour can only be tested headed.
 # CHROME_PATH picks the browser. SYNCED_PINS_LOAD=cdp loads the extension
 # over the DevTools protocol, for browsers that ignore --load-extension such
-# as branded Google Chrome.
+# as branded Google Chrome. The run ends once every test has reported, even
+# where a browser process that outlived its kill still holds something open.
 set -eu
 cd "$(dirname "$0")/.."
 if ! command -v xvfb-run >/dev/null; then
@@ -14,4 +15,4 @@ fi
 unset WAYLAND_DISPLAY
 export SYNCED_PINS_XVFB=1
 exec xvfb-run --auto-servernum --server-args='-screen 0 1600x1000x24 -nolisten tcp' \
-  node --test --test-concurrency=1 "$@" test/*.test.js
+  node --test --test-concurrency=1 --test-force-exit "$@" test/*.test.js

@@ -41,6 +41,12 @@ before(async () => {
 after(() => {
   server.closeAllConnections();
   server.close();
+  // Whatever still holds the process open once every test has ended, which
+  // scripts/test-e2e.sh then ends with --test-force-exit.
+  setTimeout(() => {
+    const open = process.getActiveResourcesInfo().filter((name) => name !== 'TTYWrap');
+    if (open.length > 0) console.log(`# still open after the tests: ${open.join(', ')}`);
+  }, 2000).unref();
 });
 
 const pageUrl = (name) => `${origin}/${name}`;
