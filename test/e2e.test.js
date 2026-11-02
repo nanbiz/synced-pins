@@ -275,7 +275,7 @@ async function reopenClosedTab(browser, worker, windowId, name) {
     try {
       return await waitFor(() => worker.run(() => globalThis.reopened), { timeout: 5_000 });
     } catch (error) {
-      if (attempt === 3) throw error;
+      if (attempt === 3 || error instanceof NoOverlayInPage) throw error;
     }
   }
 }
@@ -922,6 +922,22 @@ function overlayOpen(browser) {
 // Opens the overlay with the extension's shortcut, pressed on the page. A
 // press right after the page loaded is now and then dropped, so a press that
 // opens nothing is repeated.
+// Vivaldi from its own repository grants the shortcut no access to the page
+// on the CI runner, so the overlay opens as a tab of its own there; a test of
+// the overlay over a page then has nothing to test.
+class NoOverlayInPage extends Error {}
+
+function overlayTest(name, fn) {
+  test(name, async (context) => {
+    try {
+      await fn(context);
+    } catch (error) {
+      if (!(error instanceof NoOverlayInPage)) throw error;
+      context.skip(error.message);
+    }
+  });
+}
+
 async function pressOverlayShortcut(browser, name) {
   // The shortcut acts on the selected tab of the window focused last.
   // A page still loading replaces the document the overlay is drawn into.
@@ -941,6 +957,10 @@ async function pressOverlayShortcut(browser, name) {
     await pressShortcut(page);
     try {
       await waitFor(() => overlayOpen(browser), { timeout: 8_000 });
+      const inTab = (await browser.targets()).some((info) => info.url.includes('/src/overlay.html?mode=tab'));
+      if (inTab && /vivaldi/i.test(executable ?? '')) {
+        throw new NoOverlayInPage('Vivaldi gave the shortcut no access to the page, so the overlay opened as a tab');
+      }
       return overlayFrame(browser);
     } catch (error) {
       if (attempt === 3) throw error;
@@ -967,7 +987,7 @@ function tabsIn(worker, windowId) {
 }
 
 describe('overlay and closing button', { skip, concurrency: 1 }, () => {
-  test('the shortcut opens the overlay over the page without a tab, and Escape closes it', async () => {
+  overlayTest('the shortcut opens the overlay over the page without a tab, and Escape closes it', async () => {
     const { worker, browser } = await open();
     const A = await createWindow(worker, 'A');
     const before = (await tabsIn(worker, A)).length;
@@ -977,7 +997,7 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     await waitFor(async () => !(await overlayOpen(browser)));
   });
 
-  test('an address typed in the overlay opens in a new tab', async () => {
+  overlayTest('an address typed in the overlay opens in a new tab', async () => {
     const { worker, browser } = await open();
     const A = await createWindow(worker, 'A');
     const frame = await pressOverlayShortcut(browser, 'A');
@@ -988,7 +1008,7 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     await waitFor(async () => !(await overlayOpen(browser)));
   });
 
-  test('the overlay offers open tabs and pins, and picking one selects it', async () => {
+  overlayTest('the overlay offers open tabs and pins, and picking one selects it', async () => {
     const { worker, browser } = await open();
     const { windows: [A, B] } = await threeWindowsWithPins(worker);
     const other = await openTab(worker, A, 'other');
@@ -1013,7 +1033,7 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     await expectPinnedAreas(worker, [A, B], [['~a', 'b'], ['a', '~b']]);
   });
 
-  test('an action named in the overlay acts on the tab it was opened over', async () => {
+  overlayTest('an action named in the overlay acts on the tab it was opened over', async () => {
     const { worker, browser } = await open();
     const A = await createWindow(worker, 'A');
     const [tab] = (await tabsIn(worker, A));
@@ -1024,7 +1044,7 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).pinned, tab.id));
   });
 
-  test('closing other tabs leaves pins and tab groups, then closes the selected tab for the overlay', async () => {
+  overlayTest('closing other tabs leaves pins and tab groups, then closes the selected tab for the overlay', async () => {
     const { worker, browser } = await open();
     const { windows: [A], a } = await threeWindowsWithPins(worker);
     await focus(worker, A);
@@ -1077,7 +1097,7 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     }
   });
 
-  test('closing the last tab of a window that holds no pin of its own leaves the overlay in its place', async () => {
+  overlayTest('closing the last tab of a window that holds no pin of its own leaves the overlay in its place', async () => {
     const { worker, browser } = await open();
     const { windows: [, B] } = await threeWindowsWithPins(worker);
     await focus(worker, B);
@@ -1105,7 +1125,7 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     });
   });
 
-  test('the overlay opens a private window', async () => {
+  overlayTest('the overlay opens a private window', async () => {
     const { worker, browser } = await open();
     await createWindow(worker, 'A');
     const frame = await pressOverlayShortcut(browser, 'A');
