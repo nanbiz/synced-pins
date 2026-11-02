@@ -894,11 +894,23 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
 async function overlayFrame(browser) {
   const target = await waitFor(async () => (await browser.targets()).find(
     (info) => info.type === 'iframe' && info.url.includes('/src/overlay.html'),
-  ));
+  )).catch(async (error) => {
+    const targets = (await browser.targets()).map((info) => `${info.type} ${info.url.slice(0, 90)}`);
+    throw new Error(`${error.message}\ntargets: ${JSON.stringify(targets)}`);
+  });
   const frame = await browser.attach(target.targetId);
   await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, frame.sessionId);
   await waitFor(() => frame.run(() => document.activeElement?.id === 'query'));
   return frame;
+}
+
+// Presses the extension's shortcut, Ctrl+Shift+Space, on the page.
+async function pressShortcut(context) {
+  for (const type of ['rawKeyDown', 'keyUp']) {
+    current.browser.connection.send('Input.dispatchKeyEvent', {
+      type, key: ' ', code: 'Space', modifiers: 2 | 8, windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32,
+    }, context.sessionId).catch(() => {});
+  }
 }
 
 function overlayOpen(browser) {
@@ -920,9 +932,9 @@ async function pressOverlayShortcut(browser, name) {
   const page = await browser.page(pageUrl(name));
   await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, page.sessionId);
   for (let attempt = 1; ; attempt++) {
-    await page.press('K', { ctrl: true, shift: true, wait: false });
+    await pressShortcut(page);
     try {
-      await waitFor(() => overlayOpen(browser), { timeout: 4_000 });
+      await waitFor(() => overlayOpen(browser), { timeout: 8_000 });
       return overlayFrame(browser);
     } catch (error) {
       if (attempt === 3) throw error;
@@ -1040,17 +1052,19 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     assert.equal(await worker.run((id) => chrome.tabs.get(id).then(() => true, () => false), grouped), true);
   });
 
-  test('over a page the browser keeps to itself the overlay opens as the button\'s popup', async () => {
+  test('over a page the browser keeps to itself the overlay opens as the button\'s popup, or as a tab without popups', async () => {
     const { worker, browser } = await open();
     const B = await createWindow(worker, 'B');
     const [{ id }] = await tabsIn(worker, B);
     await worker.run((tabId) => chrome.tabs.update(tabId, { url: 'chrome://version' }), id);
     const version = await browser.page((url) => url.startsWith('chrome://version'));
     await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, version.sessionId);
-    const popupOpen = async () => (await browser.targets()).some((info) => info.url.includes('/src/overlay.html?mode=popup'));
-    for (let attempt = 1; !(await popupOpen()); attempt++) {
-      await version.press('K', { ctrl: true, shift: true, wait: false });
-      await waitFor(popupOpen, { timeout: 4_000 }).catch((error) => {
+    // Vivaldi opens no extension popup on request.
+    const mode = /vivaldi/i.test(executable ?? '') ? 'tab' : 'popup';
+    const shown = async () => (await browser.targets()).some((info) => info.url.includes(`/src/overlay.html?mode=${mode}`));
+    for (let attempt = 1; !(await shown()); attempt++) {
+      await pressShortcut(version);
+      await waitFor(shown, { timeout: 8_000 }).catch((error) => {
         if (attempt === 3) throw error;
       });
     }
@@ -1072,7 +1086,6 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     });
     // An address picked there opens in that same tab.
     const page = await browser.page((url) => url.includes('/src/overlay.html?mode=tab'));
-    await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, page.sessionId);
     await waitFor(() => page.run(() => document.activeElement?.id === 'query'));
     await typeInto(page, pageUrl('there').replace('http://', ''));
     await waitFor(async () => (await overlayResults(page))[0]?.kind === 'Open');

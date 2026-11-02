@@ -55,14 +55,22 @@ function toggleInPage(path, query) {
 
 // The overlay opens in the page where the browser lets an extension draw
 // into it, and otherwise, as on the browser's own pages, the New Tab page or
-// this extension's placeholders, as the toolbar button's popup.
+// this extension's placeholders, as the toolbar button's popup. A browser
+// without extension popups on request, such as Vivaldi, gets it as a tab of
+// its own, the way a New Tab page opens.
 export async function toggleOverlay(tab) {
   if (!tab || isOverlayTab(tab)) return;
   try {
     const query = new URLSearchParams({ mode: 'frame', tab: tab.id, window: tab.windowId }).toString();
     await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: toggleInPage, args: [overlayPath, query] });
+    return;
   } catch {
+    // The page cannot host it.
+  }
+  try {
     await openOverlayPopup(tab);
+  } catch {
+    await chrome.tabs.create({ windowId: tab.windowId, index: tab.index + 1, active: true, url: overlayUrl('tab', tab) });
   }
 }
 
