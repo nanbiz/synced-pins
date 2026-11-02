@@ -35,7 +35,13 @@ before(async () => {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
 });
-after(() => server.close());
+// A browser process that outlives its kill, as Vivaldi's can, holds a
+// keep-alive connection open, which would keep the server and so the test run
+// from ending.
+after(() => {
+  server.closeAllConnections();
+  server.close();
+});
 
 const pageUrl = (name) => `${origin}/${name}`;
 
@@ -1167,7 +1173,9 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
   });
 
   test('installing opens the welcome page, which shows the overlay\'s shortcut', async () => {
-    const { browser } = await open({ keepWelcome: true });
+    const { browser, worker } = await open({ keepWelcome: true });
+    // Vivaldi leaves a page that is attached to while it loads unanswered.
+    await waitFor(() => worker.run(async () => (await chrome.tabs.query({})).some((tab) => tab.url.includes('/src/welcome.html') && tab.status === 'complete')));
     const page = await browser.page((url) => url.includes('/src/welcome.html'));
     await waitFor(async () => (await page.run(() => document.getElementById('shortcut').textContent)) === 'Ctrl + Shift + Space');
     assert.equal(await page.run(() => document.getElementById('ctrl-t').hidden), false);
