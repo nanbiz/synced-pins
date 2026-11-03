@@ -969,6 +969,10 @@ function overlayOpen(browser) {
 // the overlay over a page then has nothing to test.
 class NoOverlayInPage extends Error {}
 
+// A shortcut press on the CI runners is now and then dropped several times in
+// a row.
+const SHORTCUT_TRIES = 5;
+
 function overlayTest(name, fn) {
   test(name, async (context) => {
     try {
@@ -1007,13 +1011,14 @@ async function pressOverlayShortcut(browser, name) {
       }
       // Now and then on the CI runners the shortcut grants no access to the
       // page and the overlay falls back to the popup; that try counts as lost.
-      if (!inPage && attempt < 3 && targets.some((info) => info.url.includes('/src/overlay.html?mode=popup'))) {
+      if (!inPage && attempt < SHORTCUT_TRIES && targets.some((info) => info.url.includes('/src/overlay.html?mode=popup'))) {
         await current.browser.connection.send('Page.bringToFront', {}, page.sessionId);
         continue;
       }
       return overlayFrame(browser);
     } catch (error) {
-      if (attempt === 3) throw error;
+      if (attempt === SHORTCUT_TRIES) throw error;
+      await current.browser.connection.send('Page.bringToFront', {}, page.sessionId);
     }
   }
 }
