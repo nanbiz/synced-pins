@@ -1305,6 +1305,12 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
 
   test('installing opens the page that puts the overlay on Ctrl+T, once', async () => {
     const { browser, worker, sandbox } = await open({ keepSetup: true });
+    if (/vivaldi/i.test(executable ?? '')) {
+      // Vivaldi's own Ctrl+T new tab becomes the overlay, so it gets no page.
+      await waitFor(() => worker.run(async () => (await chrome.storage.local.get('setupPending')).setupPending === false));
+      assert.equal(await worker.run(async () => (await chrome.tabs.query({})).filter((tab) => (tab.pendingUrl || tab.url).includes('/src/welcome.html')).length), 0);
+      return;
+    }
     // Vivaldi leaves a page that is attached to while it loads unanswered.
     await waitFor(() => worker.run(async () => (await chrome.tabs.query({})).some((tab) => tab.url.includes('/src/welcome.html') && tab.status === 'complete')));
     const page = await browser.page((url) => url.includes('/src/welcome.html'));
@@ -1316,7 +1322,10 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     assert.ok(pages <= 1, `${pages} setup pages after a restart`);
   });
 
-  overlayTest('once put on Ctrl+T, Ctrl+T opens the overlay and no tab', async () => {
+  overlayTest('once put on Ctrl+T, Ctrl+T opens the overlay and no tab', async (context) => {
+    // Vivaldi keeps its own Ctrl+T, so the key opens its new tab as well,
+    // which then becomes the overlay as a tab.
+    if (/vivaldi/i.test(executable ?? '')) return context.skip('Vivaldi opens its own new tab on Ctrl+T as well');
     const { worker, browser } = await open();
     const A = await createWindow(worker, 'A');
     const extensions = await worker.run(async () => (await chrome.tabs.create({ url: 'chrome://extensions' })).id);
@@ -1347,6 +1356,11 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     const { worker, browser } = await open();
     await createWindow(worker, 'A');
     const frame = await pressOverlayShortcut(browser, 'A');
+    if (/vivaldi/i.test(executable ?? '')) {
+      await waitFor(() => frame.run(() => document.getElementById('query') === document.activeElement));
+      assert.equal(await frame.run(() => document.getElementById('setup').hidden), true);
+      return;
+    }
     await waitFor(() => frame.run(() => !document.getElementById('setup').hidden));
     await frame.run(() => document.getElementById('setup-open').click());
     await waitFor(() => worker.run(async () => (await chrome.tabs.query({})).some((tab) => tab.url.includes('/src/welcome.html') && tab.status === 'complete')));
