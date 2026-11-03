@@ -69,8 +69,10 @@ const NEW_TAB_PAGE = /^[a-z]+:\/\/(newtab|new-tab-page|startpage|vivaldi-webui\/
 
 // Turns a tab that opened on a New Tab page into the overlay as a tab of its
 // own; back is the tab that was selected before it, which Escape returns to.
+// A pinned one is left alone: Chromium puts those where it closed this
+// extension's placeholders, and the pin list unpins them itself.
 export async function replaceNewTab(tab, url, back) {
-  if (!NEW_TAB_PAGE.test(url ?? '')) return;
+  if (tab.pinned || !NEW_TAB_PAGE.test(url ?? '')) return;
   const query = new URLSearchParams({ mode: 'tab', newtab: '1' });
   if (back !== undefined) query.set('back', back);
   await chrome.tabs.update(tab.id, { url: chrome.runtime.getURL(`${overlayPath}?${query}`) }).catch(() => {});

@@ -915,10 +915,12 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     await waitFor(() => worker.run(() => false).catch(() => true));
     const reloaded = await readyWorker(browser);
     await expectPinnedAreas(reloaded, [A, B, C], [['a', 'b'], ['~a', '~b'], ['~a', '~b']]);
-    // The New Tab page is chrome://newtab/, or the same under the browser's
-    // own scheme, such as edge://newtab/.
-    const unpinned = (await layout(reloaded)).find((window) => window.id === C).tabs.filter((tab) => !tab.pinned);
-    assert.deepEqual(unpinned.map((tab) => new URL(tab.url).hostname), ['newtab']);
+    // The New Tab page the browser opens there becomes the overlay.
+    let unpinned;
+    await waitFor(async () => {
+      unpinned = (await layout(reloaded)).find((window) => window.id === C).tabs.filter((tab) => !tab.pinned);
+      return unpinned.length === 1 && unpinned[0].url.includes('/src/overlay.html?mode=tab&newtab=1');
+    }).catch(() => assert.fail(JSON.stringify(unpinned)));
   });
 });
 
@@ -1336,7 +1338,9 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
         if (attempt === 3) throw error;
       });
     }
-    assert.equal((await tabsIn(worker, A)).length, before);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    const after = await tabsIn(worker, A);
+    assert.equal(after.length, before, JSON.stringify(after.map((tab) => tab.url)));
   });
 
   overlayTest('the overlay offers to go on Ctrl+T until dismissed, and its page shows the shortcut', async () => {

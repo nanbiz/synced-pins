@@ -84,8 +84,13 @@ const selectedBefore = (tab) => {
   return now === tab.id ? before : now;
 };
 chrome.tabs.onCreated.addListener((tab) => replaceNewTab(tab, tab.pendingUrl || tab.url, selectedBefore(tab)));
-chrome.tabs.onUpdated.addListener((tabId, { url }, tab) => {
-  if (url) replaceNewTab(tab, url, selectedBefore(tab));
+chrome.tabs.onUpdated.addListener((tabId, { url, pinned }, tab) => {
+  if (url || pinned === false) replaceNewTab(tab, tab.pendingUrl || tab.url, selectedBefore(tab));
+});
+// New Tab pages opened while the worker was not running, as when the browser
+// starts or the extension reloads, are turned once it runs.
+chrome.tabs.query({}).then((tabs) => {
+  for (const tab of tabs) replaceNewTab(tab, tab.pendingUrl || tab.url);
 });
 const countIn = (windowId) => showClosableCount(windowId);
 chrome.tabs.onActivated.addListener(({ windowId }) => countIn(windowId));
