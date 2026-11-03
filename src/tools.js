@@ -121,25 +121,31 @@ export async function replaceNewTab(tab, url, back, { found = false } = {}) {
   // in the same place, which takes the keyboard, and the New Tab page goes.
   // Edge reports a tab from the tab strip's button as not yet selected, so
   // only the New Tab pages found open at start keep their own state.
+  const active = found ? tab.active : true;
+  let overlay;
   try {
-    await chrome.tabs.create({ windowId: tab.windowId, index: tab.index, active: found ? tab.active : true, url: chrome.runtime.getURL(`${overlayPath}?${query}`) });
+    overlay = await chrome.tabs.create({ windowId: tab.windowId, index: tab.index, active, url: chrome.runtime.getURL(`${overlayPath}?${query}`) });
   } catch {
     return;
   }
   await removeNewTab(tab);
+  // Closing the New Tab page lets Edge select the page before it instead.
+  if (active) await chrome.tabs.update(overlay.id, { active: true }).catch(() => {});
 }
 
-// Edge refuses to close a tab while it is still adding it to the strip, so
-// closing is tried again for a moment.
+// Edge refuses to close its New Tab page ("Cannot remove NTP tab"), but lets
+// a tab go once it shows another page, so the tab is made blank first there;
+// a tab still being added to the strip is tried again for a moment.
 async function removeNewTab(tab) {
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
       await chrome.tabs.remove(tab.id);
       return;
-    } catch {
+    } catch (error) {
       const now = await chrome.tabs.get(tab.id).catch(() => null);
       if (!now) return;
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (/NTP/.test(error?.message ?? '')) await chrome.tabs.update(tab.id, { url: 'about:blank' }).catch(() => {});
+      else await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
 }
