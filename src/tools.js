@@ -63,6 +63,11 @@ function toggleInPage(path, query) {
   return 'opened';
 }
 
+// When the overlay's shortcut last arrived, and how soon after it a New Tab
+// page counts as opened by the same key press.
+let overlayCommandAt = 0;
+const SAME_KEY_MS = 500;
+
 // The browsers' New Tab pages, which the overlay replaces wherever a tab
 // opens on one: the tab strip's button, the menu, a new window.
 const NEW_TAB_PAGE = /^[a-z]+:\/\/(newtab|new-tab-page|startpage|vivaldi-webui\/startpage)([/?#]|$)/;
@@ -73,6 +78,12 @@ const NEW_TAB_PAGE = /^[a-z]+:\/\/(newtab|new-tab-page|startpage|vivaldi-webui\/
 // extension's placeholders, and the pin list unpins them itself.
 export async function replaceNewTab(tab, url, back) {
   if (tab.pinned || !NEW_TAB_PAGE.test(url ?? '')) return;
+  // A browser that keeps Ctrl+T for itself, such as Vivaldi, opens its new
+  // tab on the same key that opened the overlay; that tab is not wanted.
+  if (Date.now() - overlayCommandAt < SAME_KEY_MS) {
+    await chrome.tabs.remove(tab.id).catch(() => {});
+    return;
+  }
   const query = new URLSearchParams({ mode: 'tab', newtab: '1' });
   if (back !== undefined) query.set('back', back);
   await chrome.tabs.update(tab.id, { url: chrome.runtime.getURL(`${overlayPath}?${query}`) }).catch(() => {});
@@ -84,6 +95,7 @@ export async function replaceNewTab(tab, url, back) {
 // without extension popups on request, such as Vivaldi, gets it as a tab of
 // its own, the way a New Tab page opens.
 export async function toggleOverlay(tab) {
+  overlayCommandAt = Date.now();
   if (!tab || isOverlayTab(tab)) return;
   try {
     const query = new URLSearchParams({ mode: 'frame', tab: tab.id, window: tab.windowId }).toString();

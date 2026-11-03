@@ -386,16 +386,13 @@ window.addEventListener('focus', () => query.focus());
 const setup = document.getElementById('setup');
 
 // The row stays until the overlay is on Ctrl+T or the row is dismissed.
-// Vivaldi, which marks its tabs with vivExtData, keeps Ctrl+T for its own new
-// tab, which becomes the overlay anyway, so it is offered nothing there.
 async function offerSetup() {
-  const [commands, { setupDismissed }, [anyTab]] = await Promise.all([
+  const [commands, { setupDismissed }] = await Promise.all([
     chrome.commands.getAll(),
     chrome.storage.local.get('setupDismissed'),
-    chrome.tabs.query({ active: true, lastFocusedWindow: true }),
   ]);
   const command = commands.find((candidate) => candidate.name === 'open-overlay');
-  setup.hidden = setupDismissed || command?.shortcut === 'Ctrl+T' || (anyTab !== undefined && 'vivExtData' in anyTab);
+  setup.hidden = setupDismissed || command?.shortcut === 'Ctrl+T';
 }
 
 for (const button of setup.querySelectorAll('button')) {

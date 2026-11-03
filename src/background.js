@@ -15,13 +15,10 @@ async function promptSetupNow() {
   const { setupPending } = await chrome.storage.local.get('setupPending');
   if (!setupPending) return;
   const command = (await chrome.commands.getAll()).find((candidate) => candidate.name === 'open-overlay');
-  const [window] = await chrome.windows.getAll({ ...normalWindows, populate: true });
-  // Vivaldi, which marks its tabs with vivExtData, keeps Ctrl+T for its own
-  // new tab, which becomes the overlay anyway.
-  const needed = command?.shortcut !== 'Ctrl+T' && !(window?.tabs ?? []).some((tab) => 'vivExtData' in tab);
-  if (needed && !window) return;
+  const [window] = await chrome.windows.getAll(normalWindows);
+  if (command?.shortcut !== 'Ctrl+T' && !window) return;
   await chrome.storage.local.set({ setupPending: false });
-  if (needed) await chrome.tabs.create({ windowId: window.id, url: setupPage });
+  if (command?.shortcut !== 'Ctrl+T') await chrome.tabs.create({ windowId: window.id, url: setupPage });
 }
 
 // One check at a time, so a window opening during the installation does not
