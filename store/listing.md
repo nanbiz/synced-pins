@@ -21,7 +21,7 @@ The tab handling of the Zen browser in Chrome: the same pinned tabs in every win
 
 Pinned tabs in every window. Each pinned tab is open in one window. Your other windows show it in the same place, with its icon, and selecting it there brings the page over as it is: nothing reloads, a video keeps playing, a half-typed message stays. Pin, unpin or reorder a pinned tab in any window and every window follows. Closing a pinned tab closes its page, but the pin stays: select it again and it opens at the address it was pinned at. Unpin it to remove it.
 
-New tab overlay. Press Ctrl+Shift+Space, or Ctrl+T once you set it up from the overlay, and a search bar opens over the page. Type an address or a search and press Enter to open it in a new tab, type part of a tab's title to switch to it, or type an action such as pin tab, duplicate or reload to run it. Escape closes it without leaving a tab behind.
+New tab overlay. Press Ctrl+Shift+Space, or Ctrl+T once you set it up from the overlay, and a search bar opens over the page. Type an address or a search and press Enter to open it in a new tab, type part of a tab's title to switch to it, find sites from your history once you allow it, or type an action such as pin tab, duplicate or reload to run it. Escape closes it without leaving a tab behind.
 
 Clearing tabs. The toolbar button closes every tab of its window that is neither pinned nor in a tab group, apart from the one you are on, and shows how many. Click it again and the overlay opens over the tab you are on, which gives way to whatever you pick there.
 
@@ -36,6 +36,8 @@ Nothing is collected or sent anywhere. Source: https://github.com/nanbiz/synced-
 - activeTab: Lets the new tab overlay be drawn over the page the user is on, only after the user presses the overlay's keyboard shortcut there.
 - scripting: Inserts the new tab overlay into the page the user is on when the user presses its keyboard shortcut; nothing is read from the page.
 - search: Sends a search the user picks in the new tab overlay to the browser's default search engine.
+- history (optional, asked for from the overlay): Lets the new tab overlay suggest sites and pages the user visited for what they type, once the user allows it; nothing is kept or sent.
+- bookmarks (optional, asked for from the overlay): Lets the new tab overlay suggest the user's bookmarks for what they type, once the user allows it; nothing is kept or sent.
 - Remote code: No.
 - Data usage: no data collected; certify the three statements (not sold, not used for unrelated purposes, not used for creditworthiness).
 - Privacy policy: https://github.com/nanbiz/synced-pins/blob/main/PRIVACY.md

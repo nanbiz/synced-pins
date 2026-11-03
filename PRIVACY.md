@@ -6,6 +6,8 @@ To show your pinned tabs in every window, it reads the address, title and icon o
 
 While its new tab overlay is open, it reads the address, title and icon of your open tabs to suggest them as you type, and keeps none of them. Text you typed into the overlay and left without choosing anything stays in session storage for 45 seconds, so reopening the overlay over the same tab brings it back. The overlay is drawn over a page only after you press its shortcut there; it reads nothing from the page. The toolbar button counts and closes the tabs of its window and reads nothing else about them.
 
+If you allow it to read your history and bookmarks, from the row the overlay offers for it, the overlay searches them for what you type while it is open, in the browser, and keeps none of it.
+
 To find the cause of a pin that went wrong, the extension keeps a log of its recent decisions about pinned tabs in local storage, naming tabs, windows and pins by the browser's internal numbers only, without any address or title.
 
 It reads nothing from the pages themselves.

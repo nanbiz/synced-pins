@@ -39,20 +39,41 @@ function toggleInPage(path, query) {
   frame.allow = 'clipboard-write';
   frame.style.cssText = 'all:initial;position:fixed;inset:0;width:100vw;height:100vh;border:0;'
     + 'margin:0;padding:0;background:rgb(0 0 0 / 0.45);backdrop-filter:blur(3px);color-scheme:light dark;'
-    + 'z-index:2147483647';
+    + 'z-index:2147483647;opacity:0';
   const focusedBefore = document.activeElement;
   const close = () => {
     window.removeEventListener('message', onMessage);
     frame.remove();
     if (focusedBefore instanceof HTMLElement) focusedBefore.focus({ preventScroll: true });
   };
+  // The frame shows once the overlay in it has drawn its bar, so the dimmed
+  // page and the bar appear together.
   function onMessage(event) {
-    if (event.source === frame.contentWindow && event.data === 'synced-pins:close') close();
+    if (event.source !== frame.contentWindow) return;
+    if (event.data === 'synced-pins:ready') frame.style.opacity = '1';
+    if (event.data === 'synced-pins:close') close();
   }
   window.addEventListener('message', onMessage);
+  // An overlay that never gets ready leaves no invisible frame over the page.
+  setTimeout(() => {
+    if (frame.isConnected && frame.style.opacity !== '1') close();
+  }, 3000);
   frame.addEventListener('load', () => frame.focus());
   document.documentElement.append(frame);
   return 'opened';
+}
+
+// The browsers' New Tab pages, which the overlay replaces wherever a tab
+// opens on one: the tab strip's button, the menu, a new window.
+const NEW_TAB_PAGE = /^[a-z]+:\/\/(newtab|new-tab-page|startpage|vivaldi-webui\/startpage)([/?#]|$)/;
+
+// Turns a tab that opened on a New Tab page into the overlay as a tab of its
+// own; back is the tab that was selected before it, which Escape returns to.
+export async function replaceNewTab(tab, url, back) {
+  if (!NEW_TAB_PAGE.test(url ?? '')) return;
+  const query = new URLSearchParams({ mode: 'tab', newtab: '1' });
+  if (back !== undefined) query.set('back', back);
+  await chrome.tabs.update(tab.id, { url: chrome.runtime.getURL(`${overlayPath}?${query}`) }).catch(() => {});
 }
 
 // The overlay opens in the page where the browser lets an extension draw
@@ -64,7 +85,7 @@ export async function toggleOverlay(tab) {
   if (!tab || isOverlayTab(tab)) return;
   try {
     const query = new URLSearchParams({ mode: 'frame', tab: tab.id, window: tab.windowId }).toString();
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: toggleInPage, args: [overlayPath, query] });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: toggleInPage, args: [overlayPath, query], injectImmediately: true });
     return;
   } catch (error) {
     // The page cannot host it; the reason stays for the session, for finding
@@ -125,7 +146,7 @@ export async function closeTabs(tab, { othersOnly = false } = {}) {
   // overlay, the overlay takes the tab's place at once.
   try {
     const query = new URLSearchParams({ mode: 'frame', replace: '1', tab: tab.id, window: tab.windowId }).toString();
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: toggleInPage, args: [overlayPath, query] });
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: toggleInPage, args: [overlayPath, query], injectImmediately: true });
   } catch {
     await chrome.tabs.create({ windowId: tab.windowId, index: tab.index + 1, active: true, url: overlayUrl('tab', tab) });
     await chrome.tabs.remove(tab.id);

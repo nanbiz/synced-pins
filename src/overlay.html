@@ -5,6 +5,8 @@
   <meta name="color-scheme" content="light dark">
   <title>New Tab</title>
   <link rel="stylesheet" href="overlay.css">
+  <link rel="modulepreload" href="match.js">
+  <link rel="modulepreload" href="quick-actions.js">
   <script type="module" src="overlay.js"></script>
 </head>
 <body>
@@ -13,12 +15,18 @@
       <img src="search.svg" alt="">
       <input id="query" type="text" autocomplete="off" spellcheck="false" placeholder="Search or enter address" aria-label="Search or enter address" autofocus>
     </div>
-    <div id="pins"></div>
     <div id="results" role="listbox"></div>
-    <div id="setup" hidden>
+    <div id="history" class="offer" hidden>
+      <img src="history.svg" alt="">
+      <span>History and bookmarks</span>
+      <button id="history-allow" class="primary" type="button">Include</button>
+      <button id="history-dismiss" class="dismiss" type="button" aria-label="Dismiss">✕</button>
+    </div>
+    <div id="setup" class="offer" hidden>
+      <img src="keyboard.svg" alt="">
       <span>Open this with <kbd>Ctrl</kbd>+<kbd>T</kbd></span>
-      <button id="setup-open" type="button">Set up</button>
-      <button id="setup-dismiss" type="button" aria-label="Dismiss">✕</button>
+      <button id="setup-open" class="primary" type="button">Set up</button>
+      <button id="setup-dismiss" class="dismiss" type="button" aria-label="Dismiss">✕</button>
     </div>
   </div>
 </body>

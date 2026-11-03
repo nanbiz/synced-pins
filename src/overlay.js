@@ -25,7 +25,6 @@ const MAX_ACTIONS = 5;
 const MAX_TABS = 6;
 
 const query = document.getElementById('query');
-const pinsRow = document.getElementById('pins');
 const resultsList = document.getElementById('results');
 document.body.classList.add(mode);
 
@@ -50,6 +49,105 @@ function glyphUrl(path) {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
+// An address as the row shows it beside the title: host and path, without
+// the scheme or a leading www.
+function siteOf(url) {
+  try {
+    const { hostname, pathname } = new URL(url);
+    return `${hostname.replace(/^www\./, '')}${pathname === '/' ? '' : pathname}`;
+  } catch {
+    return url;
+  }
+}
+
+// History and bookmarks, once the user has let the extension read them. A
+// site whose name starts with what is typed is offered as the site itself,
+// ahead of the search, as the address bar completes it; single pages from
+// history and bookmarks come after the open tabs. They arrive asynchronously,
+// so each query's are kept and the list is drawn again when they come.
+const MAX_SITES = 2;
+const MAX_PAGES = 4;
+const MAX_BOOKMARKS = 3;
+const recall = { text: null, sites: [], pages: [] };
+
+function recalled(text) {
+  if (recall.text !== text) {
+    recall.text = text;
+    recall.sites = [];
+    recall.pages = [];
+    recallFor(text).then((found) => {
+      if (recall.text !== text) return;
+      Object.assign(recall, found);
+      if (found.sites.length + found.pages.length > 0) render();
+    }, () => {});
+  }
+  return recall;
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '';
+  }
+}
+
+async function recallFor(text) {
+  const [history, bookmarks] = await Promise.all([
+    chrome.history ? chrome.history.search({ text, startTime: 0, maxResults: 200 }) : [],
+    chrome.bookmarks ? chrome.bookmarks.search(text).catch(() => []) : [],
+  ]);
+  const word = text.trim().toLowerCase();
+  const web = (entry) => entry.url && /^https?:/.test(entry.url);
+  // Sites: hosts that start with the typed word, or have a part that does,
+  // ranked by how often they were visited.
+  const visits = new Map();
+  for (const entry of history.filter(web)) {
+    const host = hostOf(entry.url);
+    if (!host.split('.').some((part, index, parts) => parts.slice(index).join('.').startsWith(word))) continue;
+    const site = visits.get(host) ?? { host, origin: new URL(entry.url).origin, count: 0 };
+    site.count += (entry.visitCount ?? 1) + 2 * (entry.typedCount ?? 0);
+    visits.set(host, site);
+  }
+  const sites = [...visits.values()]
+    .sort((a, b) => (b.host.startsWith(word) - a.host.startsWith(word)) || b.count - a.count)
+    .slice(0, MAX_SITES)
+    .map((site) => ({ title: site.host, url: `${site.origin}/`, favIconUrl: null, kind: 'Site', pick: () => openAddress(`${site.origin}/`) }));
+  const shown = new Set([...tabs.map((tab) => tab.url), ...pins.map((pin) => pin.url), ...sites.map((site) => site.url)]);
+  const take = (entries, max, kind) => entries
+    .filter(web)
+    .filter((entry) => containsWords(text, `${entry.title ?? ''} ${entry.url}`))
+    .filter((entry) => !shown.has(entry.url) && shown.add(entry.url))
+    .slice(0, max)
+    .map((entry) => ({ title: entry.title || siteOf(entry.url), url: entry.url, favIconUrl: null, kind, pick: () => openAddress(entry.url) }));
+  const ranked = [...history].sort((a, b) => (b.typedCount ?? 0) - (a.typedCount ?? 0) || (b.visitCount ?? 0) - (a.visitCount ?? 0));
+  return { sites, pages: [...take(ranked, MAX_PAGES, 'History'), ...take(bookmarks, MAX_BOOKMARKS, 'Bookmark')] };
+}
+
+// A pin's name: its own title, else that of its open tab, else its site.
+function pinName(pin) {
+  const live = tabs.find((tab) => tab.id === pin.tabId && !isPlaceholder(tab));
+  if (pin.title || live?.title) return pin.title || live.title;
+  try {
+    return new URL(pin.url).hostname.replace(/^www\./, '');
+  } catch {
+    return pin.url;
+  }
+}
+
+// An icon element that falls back to the browser's own copy of the site's
+// icon where the site does not let other pages load it.
+function iconImage(url, favIconUrl) {
+  const icon = document.createElement('img');
+  icon.alt = '';
+  icon.src = iconFor(url, favIconUrl);
+  icon.addEventListener('error', () => {
+    const stored = iconFor(url, null);
+    if (icon.src !== stored) icon.src = stored;
+  }, { once: true });
+  return icon;
+}
+
 function iconFor(url, favIconUrl) {
   if (favIconUrl && !favIconUrl.startsWith('chrome://')) return favIconUrl;
   return chrome.runtime.getURL(`/_favicon/?${new URLSearchParams({ pageUrl: url, size: 32 })}`);
@@ -70,6 +168,23 @@ function addressOf(text) {
 function close() {
   if (mode === 'frame') window.parent.postMessage('synced-pins:close', '*');
   else if (mode === 'popup') window.close();
+}
+
+// Leaving without a choice. The overlay that took a New Tab page's place goes
+// with its tab, back to the tab selected before, as long as the window keeps
+// another tab.
+async function dismiss() {
+  await keepQuery();
+  if (mode === 'tab' && params.get('newtab') === '1' && target) {
+    const others = (await chrome.tabs.query({ windowId: target.windowId })).filter((tab) => tab.id !== target.id);
+    if (others.length > 0) {
+      const back = others.find((tab) => tab.id === Number(params.get('back')));
+      if (back) await chrome.tabs.update(back.id, { active: true });
+      await chrome.tabs.remove(target.id);
+      return;
+    }
+  }
+  close();
 }
 
 async function keepQuery() {
@@ -118,7 +233,7 @@ async function selectPin(pin) {
 function pinItems(text) {
   return pins
     .filter((pin) => containsWords(text, `${pin.title ?? ''} ${pin.url}`))
-    .map((pin) => ({ title: pin.title || pin.url, icon: iconFor(pin.url, pin.favIconUrl), kind: 'Switch to Tab', pick: () => selectPin(pin) }));
+    .map((pin) => ({ title: pinName(pin), url: pin.url, favIconUrl: pin.favIconUrl, kind: 'Switch to Tab', pick: () => selectPin(pin) }));
 }
 
 function tabItems(text) {
@@ -126,7 +241,7 @@ function tabItems(text) {
     .filter((tab) => tab.id !== target.id && !tab.pinned && !isPlaceholder(tab) && !isOverlay(tab))
     .filter((tab) => containsWords(text, `${tab.title ?? ''} ${tab.url ?? ''}`))
     .slice(0, MAX_TABS)
-    .map((tab) => ({ title: tab.title || tab.url, icon: iconFor(tab.url, tab.favIconUrl), kind: 'Switch to Tab', pick: () => selectTab(tab) }));
+    .map((tab) => ({ title: tab.title || tab.url, url: tab.url, favIconUrl: tab.favIconUrl, kind: 'Switch to Tab', pick: () => selectTab(tab) }));
 }
 
 function actionItems(text) {
@@ -151,68 +266,66 @@ function results(text) {
   const address = addressOf(text);
   const searchItem = { title: text.trim(), icon: chrome.runtime.getURL('src/search.svg'), glyph: true, kind: 'Search', pick: () => search(text.trim()) };
   const first = address
-    ? [{ title: address, icon: iconFor(address, null), kind: 'Open', pick: () => openAddress(address) }]
+    ? [{ title: address, url: address, favIconUrl: null, kind: 'Open', pick: () => openAddress(address) }]
     : [searchItem];
+  const { sites, pages } = recalled(text);
   // Zen lists the actions a query names ahead of everything else.
   return [
     ...actionItems(text),
+    ...(address ? [] : sites),
     ...first,
     ...pinItems(text),
     ...tabItems(text),
+    ...pages,
     ...(address ? [searchItem] : []),
   ];
 }
 
-function render() {
-  const text = query.value;
-  items = text.trim() ? results(text) : pins.map((pin) => ({ pin, pick: () => selectPin(pin) }));
-  selected = Math.min(selected, Math.max(items.length - 1, 0));
-  pinsRow.replaceChildren();
-  resultsList.replaceChildren();
-  items.forEach((item, index) => {
-    const element = item.pin ? pinTile(item.pin) : row(item);
-    element.classList.toggle('selected', index === selected && (!item.pin || keyboardOnPins));
-    element.addEventListener('mousedown', (event) => event.preventDefault());
-    element.addEventListener('click', () => pick(index));
-    (item.pin ? pinsRow : resultsList).append(element);
-  });
-  resultsList.querySelector('.selected')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+// With nothing typed the overlay lists the pins; nothing is selected until
+// the arrow keys move into the list.
+function pinRows() {
+  return pins.map((pin) => ({ title: pinName(pin), url: pin.url, favIconUrl: pin.favIconUrl, kind: 'Pinned', pick: () => selectPin(pin) }));
 }
 
-function pinTile(pin) {
-  const tile = document.createElement('button');
-  tile.className = 'pin';
-  tile.type = 'button';
-  tile.title = pin.title || pin.url;
-  const icon = document.createElement('img');
-  icon.src = iconFor(pin.url, pin.favIconUrl);
-  icon.alt = '';
-  const title = document.createElement('span');
-  title.textContent = pin.title || pin.url;
-  tile.append(icon, title);
-  return tile;
+function render() {
+  const text = query.value;
+  items = text.trim() ? results(text) : pinRows();
+  selected = Math.min(selected, Math.max(items.length - 1, 0));
+  resultsList.replaceChildren();
+  items.forEach((item, index) => {
+    const element = row(item);
+    element.classList.toggle('selected', index === selected && (text.trim() !== '' || keyboardOnPins));
+    element.addEventListener('mousedown', (event) => event.preventDefault());
+    element.addEventListener('click', () => pick(index));
+    resultsList.append(element);
+  });
+  resultsList.querySelector('.selected')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 function row(item) {
   const element = document.createElement('div');
   element.className = 'row';
   element.setAttribute('role', 'option');
-  const icon = document.createElement('img');
-  icon.src = item.icon;
-  icon.alt = '';
+  const icon = item.icon ? document.createElement('img') : iconImage(item.url, item.favIconUrl);
+  if (item.icon) {
+    icon.src = item.icon;
+    icon.alt = '';
+  }
   icon.classList.toggle('glyph', Boolean(item.glyph));
   const title = document.createElement('span');
   title.className = 'title';
   title.textContent = item.title;
+  const site = document.createElement('span');
+  site.className = 'site';
+  site.textContent = item.url && item.kind !== 'Open' && item.kind !== 'Site' ? siteOf(item.url) : '';
   const kind = document.createElement('span');
   kind.className = 'kind';
   kind.textContent = item.kind;
-  element.append(icon, title, kind);
+  element.append(icon, title, site, kind);
   return element;
 }
 
-// The pin tiles take the selection only once the arrow keys reach them, so
-// an empty overlay shows nothing selected.
+// The pin list takes the selection only once the arrow keys reach it.
 let keyboardOnPins = false;
 
 async function pick(index) {
@@ -247,11 +360,11 @@ document.addEventListener('keydown', (event) => {
   const key = event.key;
   if (key === 'Escape') {
     event.preventDefault();
-    keepQuery().finally(close);
-  } else if (key === 'ArrowDown' || key === 'ArrowRight' && keyboardOnPins || (event.ctrlKey && key === 'n')) {
+    dismiss();
+  } else if (key === 'ArrowDown' || (event.ctrlKey && key === 'n')) {
     event.preventDefault();
     move(1);
-  } else if (key === 'ArrowUp' || key === 'ArrowLeft' && keyboardOnPins || (event.ctrlKey && key === 'p')) {
+  } else if (key === 'ArrowUp' || (event.ctrlKey && key === 'p')) {
     event.preventDefault();
     move(-1);
   } else if (key === 'Enter') {
@@ -264,7 +377,7 @@ document.addEventListener('keydown', (event) => {
 // Zen's address bar does.
 document.addEventListener('mousedown', (event) => {
   if (mode === 'frame' && !document.getElementById('box').contains(event.target)) {
-    keepQuery().finally(close);
+    dismiss();
   }
 });
 
@@ -291,11 +404,42 @@ document.getElementById('setup-open').addEventListener('click', async () => {
 });
 document.getElementById('setup-dismiss').addEventListener('click', async () => {
   setup.hidden = true;
+  query.focus();
   await chrome.storage.local.set({ setupDismissed: true });
+});
+
+const historyOffer = document.getElementById('history');
+const RECALL = { permissions: ['history', 'bookmarks'] };
+
+// The row stays until history and bookmarks may be read or it is dismissed.
+async function offerHistory() {
+  const [allowed, { historyDismissed }] = await Promise.all([
+    chrome.permissions.contains(RECALL),
+    chrome.storage.local.get('historyDismissed'),
+  ]);
+  historyOffer.hidden = allowed || historyDismissed === true;
+}
+
+for (const button of historyOffer.querySelectorAll('button')) {
+  button.addEventListener('mousedown', (event) => event.preventDefault());
+}
+document.getElementById('history-allow').addEventListener('click', async () => {
+  const allowed = await chrome.permissions.request(RECALL).catch(() => false);
+  if (!allowed) return;
+  historyOffer.hidden = true;
+  recall.text = null;
+  render();
+  query.focus();
+});
+document.getElementById('history-dismiss').addEventListener('click', async () => {
+  historyOffer.hidden = true;
+  query.focus();
+  await chrome.storage.local.set({ historyDismissed: true });
 });
 
 async function start() {
   offerSetup();
+  offerHistory();
   const self = mode === 'tab' ? await chrome.tabs.getCurrent() : null;
   [tabs, { pins = [] }] = await Promise.all([
     chrome.tabs.query({ windowType: 'normal' }),
@@ -303,7 +447,10 @@ async function start() {
   ]);
   pins = pins.filter((pin) => pin.url);
   target = self ?? tabs.find((tab) => tab.id === Number(params.get('tab')));
-  if (!target) return;
+  if (!target) {
+    close();
+    return;
+  }
   const { overlayQuery } = await chrome.storage.session.get('overlayQuery');
   if (overlayQuery && overlayQuery.tabId === target.id && Date.now() - overlayQuery.at < KEEP_QUERY_MS) {
     query.value = overlayQuery.text;
@@ -311,6 +458,7 @@ async function start() {
   }
   render();
   query.focus();
+  if (mode === 'frame') requestAnimationFrame(() => window.parent.postMessage('synced-pins:ready', '*'));
 }
 
 start();

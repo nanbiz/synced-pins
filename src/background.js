@@ -1,5 +1,5 @@
 import { createPinSync } from './pins.js';
-import { closeTabs, showClosableCount, toggleOverlay } from './tools.js';
+import { closeTabs, replaceNewTab, showClosableCount, toggleOverlay } from './tools.js';
 
 const sync = createPinSync(chrome);
 
@@ -70,6 +70,23 @@ chrome.commands.onCommand.addListener((command, tab) => {
   if (command === 'open-overlay') toggleOverlay(tab);
 });
 chrome.action.onClicked.addListener((tab) => closeTabs(tab));
+
+// A New Tab page becomes the overlay. The selected tab of each window and the
+// one before it are kept, so the overlay's Escape can go back to where the
+// user was.
+const selection = new Map();
+chrome.tabs.onActivated.addListener(({ tabId, windowId }) => {
+  const [now] = selection.get(windowId) ?? [];
+  if (now !== tabId) selection.set(windowId, [tabId, now]);
+});
+const selectedBefore = (tab) => {
+  const [now, before] = selection.get(tab.windowId) ?? [];
+  return now === tab.id ? before : now;
+};
+chrome.tabs.onCreated.addListener((tab) => replaceNewTab(tab, tab.pendingUrl || tab.url, selectedBefore(tab)));
+chrome.tabs.onUpdated.addListener((tabId, { url }, tab) => {
+  if (url) replaceNewTab(tab, url, selectedBefore(tab));
+});
 const countIn = (windowId) => showClosableCount(windowId);
 chrome.tabs.onActivated.addListener(({ windowId }) => countIn(windowId));
 chrome.tabs.onCreated.addListener(({ windowId }) => countIn(windowId));

@@ -94,53 +94,12 @@ body.tab #box {
   color: var(--muted);
 }
 
-#pins:not(:empty),
 #results:not(:empty) {
   border-top: 1px solid var(--line);
 }
 
-#pins {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 10px 12px;
-}
-
-#pins:empty,
 #results:empty {
   display: none;
-}
-
-.pin {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  width: 76px;
-  padding: 8px 4px;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: var(--muted);
-  font: 12px system-ui, sans-serif;
-  cursor: pointer;
-}
-
-.pin span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pin img {
-  width: 24px;
-  height: 24px;
-}
-
-.pin.selected {
-  background: var(--selected);
-  color: #fff;
 }
 
 #results {
@@ -166,8 +125,19 @@ body.tab #box {
 }
 
 .row .title {
-  flex: 1;
+  flex: 0 1 auto;
+  max-width: 60%;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row .site {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.87em;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -189,14 +159,15 @@ body.tab #box {
   filter: brightness(0) invert(1);
 }
 
+.row.selected .site,
 .row.selected .kind {
   color: #fff;
   opacity: 1;
 }
 
-/* While the overlay is not on Ctrl+T, a row at its foot leads to the page
-   that puts it there. */
-#setup {
+/* Rows at the overlay's foot offer what it can do once set up: Ctrl+T, and
+   history and bookmarks. */
+.offer {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -206,15 +177,15 @@ body.tab #box {
   font-size: 13px;
 }
 
-#setup[hidden] {
+.offer[hidden] {
   display: none;
 }
 
-#setup span {
+.offer span {
   flex: 1;
 }
 
-#setup kbd {
+.offer kbd {
   display: inline-block;
   padding: 0 6px;
   border: 1px solid var(--line);
@@ -224,7 +195,7 @@ body.tab #box {
   font: 12px ui-monospace, monospace;
 }
 
-#setup button {
+.offer button {
   border: 0;
   border-radius: 7px;
   background: none;
@@ -233,13 +204,22 @@ body.tab #box {
   cursor: pointer;
 }
 
-#setup-open {
+.offer .primary {
   padding: 5px 12px;
   background: var(--selected) !important;
   color: #fff !important;
 }
 
-#setup-dismiss {
+.offer .dismiss {
   padding: 4px 6px;
   font-size: 15px !important;
+}
+
+.offer img {
+  width: 16px;
+  height: 16px;
+}
+
+.offer + .offer {
+  border-top: 1px solid var(--line);
 }

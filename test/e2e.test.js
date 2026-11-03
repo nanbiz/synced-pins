@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createServer } from 'node:http';
 import { after, afterEach, before, describe, test } from 'node:test';
@@ -1235,6 +1236,69 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     // Vivaldi keeps the test run alive after its kill while a private window
     // is left open.
     await current.browser.connection.send('Target.closeTarget', { targetId: privatePage.targetId });
+  });
+
+  test('a tab opened on the New Tab page becomes the overlay, and Escape goes back to the tab before', async () => {
+    const { worker, browser } = await open();
+    const A = await createWindow(worker, 'A');
+    const [before] = await tabsIn(worker, A);
+    const created = await worker.run(async (windowId) => (await chrome.tabs.create({ windowId, url: 'chrome://newtab/' })).id, A);
+    await waitFor(() => worker.run(async (id) => {
+      const tab = await chrome.tabs.get(id);
+      return (tab.pendingUrl || tab.url).includes('/src/overlay.html?mode=tab&newtab=1') && tab.status === 'complete';
+    }, created));
+    const page = await browser.page((url) => url.includes('/src/overlay.html?mode=tab&newtab=1'));
+    await waitFor(() => page.run(() => document.activeElement?.id === 'query'));
+    await page.press('Escape', { wait: false });
+    await waitFor(async () => (await worker.run((id) => chrome.tabs.get(id).then(() => true, () => false), created)) === false);
+    await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).active, before.id));
+  });
+
+  overlayTest('with history allowed, a typed site comes first and visited pages after the tabs', async () => {
+    // A copy that asks for history and bookmarks up front, which an unpacked
+    // extension is granted without the dialog the overlay's Include opens.
+    const copy = await mkdtemp(join(tmpdir(), 'synced-pins-history-'));
+    try {
+      await cp(extensionPath, copy, { recursive: true, filter: (path) => !/\/(node_modules|dist|\.git)(\/|$)/.test(path) });
+      const manifest = JSON.parse(await readFile(join(copy, 'manifest.json'), 'utf8'));
+      manifest.permissions.push('history', 'bookmarks');
+      delete manifest.optional_permissions;
+      await writeFile(join(copy, 'manifest.json'), JSON.stringify(manifest));
+      const { worker, browser } = await open({ extension: copy });
+      await createWindow(worker, 'A');
+      const visited = await worker.run(async (url) => (await chrome.tabs.create({ url, active: false })).id, pageUrl('remembered'));
+      await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).status === 'complete', visited));
+      await worker.run((id) => chrome.tabs.remove(id), visited);
+      const frame = await pressOverlayShortcut(browser, 'A');
+      assert.equal(await frame.run(() => document.getElementById('history').hidden), true);
+      await typeInto(frame, 'remembered');
+      await waitFor(async () => (await overlayResults(frame)).some((row) => row.title === 'remembered' && row.kind === 'History'));
+      await frame.run(() => { const input = document.getElementById('query'); input.value = ''; input.dispatchEvent(new Event('input')); });
+      await typeInto(frame, '127');
+      await waitFor(async () => {
+        const [first] = await overlayResults(frame);
+        return first?.title === '127.0.0.1' && first.kind === 'Site';
+      });
+    } finally {
+      await rm(copy, { recursive: true, force: true });
+    }
+  });
+
+  overlayTest('with nothing typed the overlay lists the pins, and offers history until allowed or dismissed', async () => {
+    const { worker, browser } = await open();
+    const { windows: [A] } = await threeWindowsWithPins(worker);
+    await focus(worker, A);
+    const frame = await pressOverlayShortcut(browser, 'A');
+    await waitFor(async () => (await overlayResults(frame)).length > 0);
+    const rows = await overlayResults(frame);
+    assert.ok(rows.every((row) => row.kind === 'Pinned' && !row.selected), JSON.stringify(rows));
+    assert.equal(await frame.run(() => document.getElementById('history').hidden), false);
+    await frame.run(() => document.getElementById('history-dismiss').click());
+    await frame.press('Escape', { wait: false });
+    await waitFor(async () => !(await overlayOpen(browser)));
+    const again = await pressOverlayShortcut(browser, 'A');
+    await waitFor(async () => (await overlayResults(again)).length > 0);
+    assert.equal(await again.run(() => document.getElementById('history').hidden), true);
   });
 
   test('installing opens the page that puts the overlay on Ctrl+T, once', async () => {
