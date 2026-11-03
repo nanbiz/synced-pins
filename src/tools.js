@@ -85,7 +85,7 @@ const replacing = new Set();
 // Drawing on any page, which the user can allow from the overlay.
 const PAGES = { origins: ['<all_urls>'] };
 
-export async function replaceNewTab(tab, url, back) {
+export async function replaceNewTab(tab, url, back, { found = false } = {}) {
   // The browser reports a new tab more than once (created, then its address),
   // and each report would open an overlay of its own.
   if (tab.pinned || replacing.has(tab.id) || !NEW_TAB_PAGE.test(url ?? '')) return;
@@ -100,14 +100,14 @@ export async function replaceNewTab(tab, url, back) {
   // Where the user lets the extension draw on pages, the New Tab page goes
   // and the overlay opens over the page they were on; elsewhere, and over
   // pages no extension may draw on, it opens as a tab.
-  if (tab.active && back !== undefined && await chrome.permissions.contains(PAGES).catch(() => false)) {
+  if (!found && back !== undefined && await chrome.permissions.contains(PAGES).catch(() => false)) {
     try {
       const page = await chrome.tabs.get(back);
       if (page.windowId === tab.windowId) {
         const frameQuery = new URLSearchParams({ mode: 'frame', tab: page.id, window: page.windowId }).toString();
         await chrome.scripting.executeScript({ target: { tabId: page.id }, func: toggleInPage, args: [overlayPath, frameQuery, true], injectImmediately: true });
         await chrome.tabs.update(page.id, { active: true });
-        await chrome.tabs.remove(tab.id);
+        await removeNewTab(tab);
         return;
       }
     } catch {
@@ -119,11 +119,28 @@ export async function replaceNewTab(tab, url, back) {
   // The browser keeps the keyboard in its address bar on a New Tab page, also
   // once the tab loads another page, so the overlay opens as a tab of its own
   // in the same place, which takes the keyboard, and the New Tab page goes.
+  // Edge reports a tab from the tab strip's button as not yet selected, so
+  // only the New Tab pages found open at start keep their own state.
   try {
-    await chrome.tabs.create({ windowId: tab.windowId, index: tab.index, active: tab.active, url: chrome.runtime.getURL(`${overlayPath}?${query}`) });
-    await chrome.tabs.remove(tab.id);
+    await chrome.tabs.create({ windowId: tab.windowId, index: tab.index, active: found ? tab.active : true, url: chrome.runtime.getURL(`${overlayPath}?${query}`) });
   } catch {
-    // The window or the tab went meanwhile.
+    return;
+  }
+  await removeNewTab(tab);
+}
+
+// Edge refuses to close a tab while it is still adding it to the strip, so
+// closing is tried again for a moment.
+async function removeNewTab(tab) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      await chrome.tabs.remove(tab.id);
+      return;
+    } catch {
+      const now = await chrome.tabs.get(tab.id).catch(() => null);
+      if (!now) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 }
 

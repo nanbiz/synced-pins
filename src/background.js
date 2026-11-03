@@ -90,7 +90,7 @@ chrome.tabs.onUpdated.addListener((tabId, { url, pinned }, tab) => {
 // New Tab pages opened while the worker was not running, as when the browser
 // starts or the extension reloads, are turned once it runs.
 chrome.tabs.query({}).then((tabs) => {
-  for (const tab of tabs) replaceNewTab(tab, tab.pendingUrl || tab.url);
+  for (const tab of tabs) replaceNewTab(tab, tab.pendingUrl || tab.url, undefined, { found: true });
 });
 const countIn = (windowId) => showClosableCount(windowId);
 chrome.tabs.onActivated.addListener(({ windowId }) => countIn(windowId));
