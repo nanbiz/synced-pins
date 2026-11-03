@@ -56,7 +56,7 @@ const pageUrl = (name) => `${origin}/${name}`;
 // chrome.runtime.reload(). On restart the profile reopens its last session
 // when restoreSession is set and otherwise follows Chromium's default of
 // opening a New Tab page.
-async function start({ restoreSession = false, sandbox, extension = extensionPath } = {}) {
+async function start({ restoreSession = false, sandbox, extension = extensionPath, keepSetup = false } = {}) {
   const fresh = !sandbox;
   if (fresh) {
     sandbox = await createSandbox();
@@ -77,12 +77,25 @@ async function start({ restoreSession = false, sandbox, extension = extensionPat
     const worker = extension === extensionPath
       ? await readyWorker(browser)
       : await browser.extensionWorker();
+    if (extension === extensionPath && fresh && !keepSetup) await closeSetup(worker);
     return { sandbox, browser, worker };
   } catch (error) {
     await browser?.kill();
     if (fresh) await sandbox.remove();
     throw error;
   }
+}
+
+// The page the extension opens once after installation, closed so the
+// windows hold only what a test opens.
+async function closeSetup(worker) {
+  await waitFor(() => worker.run(async () => (await chrome.storage.local.get('setupPending')).setupPending === false),
+    { timeout: STARTUP_TIMEOUT_MS });
+  await worker.run(async () => {
+    const page = chrome.runtime.getURL('src/welcome.html');
+    const tabs = (await chrome.tabs.query({})).filter((tab) => (tab.pendingUrl || tab.url).startsWith(page));
+    if (tabs.length > 0) await chrome.tabs.remove(tabs.map((tab) => tab.id));
+  });
 }
 
 // The extension's worker once it has built its pin list. After a reload the
@@ -933,6 +946,14 @@ async function pressShortcut(context) {
   }
 }
 
+function pressCtrlT(context) {
+  for (const type of ['rawKeyDown', 'keyUp']) {
+    current.browser.connection.send('Input.dispatchKeyEvent', {
+      type, key: 't', code: 'KeyT', modifiers: 2, windowsVirtualKeyCode: 84, nativeVirtualKeyCode: 84,
+    }, context.sessionId).catch(() => {});
+  }
+}
+
 function overlayOpen(browser) {
   return browser.targets().then((targets) => targets.some((info) => info.url.includes('/src/overlay.html')));
 }
@@ -1214,6 +1235,44 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     // Vivaldi keeps the test run alive after its kill while a private window
     // is left open.
     await current.browser.connection.send('Target.closeTarget', { targetId: privatePage.targetId });
+  });
+
+  test('installing opens the page that puts the overlay on Ctrl+T, once', async () => {
+    const { browser, worker, sandbox } = await open({ keepSetup: true });
+    // Vivaldi leaves a page that is attached to while it loads unanswered.
+    await waitFor(() => worker.run(async () => (await chrome.tabs.query({})).some((tab) => tab.url.includes('/src/welcome.html') && tab.status === 'complete')));
+    const page = await browser.page((url) => url.includes('/src/welcome.html'));
+    await waitFor(async () => (await page.run(() => document.getElementById('shortcut').textContent)) === 'Ctrl + Shift + Space');
+    const { worker: again } = await restart({ sandbox });
+    await waitFor(() => again.run(async () => (await chrome.windows.getAll()).length > 0));
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const pages = await again.run(async () => (await chrome.tabs.query({})).filter((tab) => (tab.pendingUrl || tab.url).includes('/src/welcome.html')).length);
+    assert.ok(pages <= 1, `${pages} setup pages after a restart`);
+  });
+
+  overlayTest('once put on Ctrl+T, Ctrl+T opens the overlay and no tab', async () => {
+    const { worker, browser } = await open();
+    const A = await createWindow(worker, 'A');
+    const extensions = await worker.run(async () => (await chrome.tabs.create({ url: 'chrome://extensions' })).id);
+    await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).status === 'complete', extensions));
+    const page = await browser.page((url) => /^[a-z]+:\/\/extensions/.test(url));
+    const id = await worker.run(() => chrome.runtime.id);
+    await page.run((extensionId) => new Promise((resolve) => chrome.developerPrivate.updateExtensionCommand(
+      { extensionId, commandName: 'open-overlay', keybinding: 'Ctrl+T' }, resolve)), id);
+    await worker.run((tabId) => chrome.tabs.remove(tabId), extensions);
+    await waitFor(async () => (await worker.run(async () => (await chrome.commands.getAll()).find((c) => c.name === 'open-overlay').shortcut)) === 'Ctrl+T');
+    const before = (await tabsIn(worker, A)).length;
+    await focus(worker, A);
+    const target = await browser.page(pageUrl('A'));
+    await current.browser.connection.send('Page.bringToFront', {}, target.sessionId);
+    await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, target.sessionId);
+    for (let attempt = 1; !(await overlayOpen(browser)); attempt++) {
+      pressCtrlT(target);
+      await waitFor(() => overlayOpen(browser), { timeout: 8_000 }).catch((error) => {
+        if (attempt === 3) throw error;
+      });
+    }
+    assert.equal((await tabsIn(worker, A)).length, before);
   });
 
   overlayTest('the overlay offers to go on Ctrl+T until dismissed, and its page shows the shortcut', async () => {

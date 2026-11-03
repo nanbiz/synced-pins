@@ -6,9 +6,37 @@ const sync = createPinSync(chrome);
 const normalWindows = { windowTypes: ['normal'] };
 const layoutChanged = () => sync.note({ type: 'layout' });
 
-chrome.runtime.onInstalled.addListener(({ reason }) => {
+// Once after installation the page that puts the overlay on Ctrl+T opens,
+// unless it is there already. The browser can report the installation before
+// it has a window to open the page in, so the page waits for the first one.
+const setupPage = chrome.runtime.getURL('src/welcome.html');
+
+async function promptSetupNow() {
+  const { setupPending } = await chrome.storage.local.get('setupPending');
+  if (!setupPending) return;
+  const command = (await chrome.commands.getAll()).find((candidate) => candidate.name === 'open-overlay');
+  const [window] = await chrome.windows.getAll(normalWindows);
+  if (command?.shortcut !== 'Ctrl+T' && !window) return;
+  await chrome.storage.local.set({ setupPending: false });
+  if (command?.shortcut !== 'Ctrl+T') await chrome.tabs.create({ windowId: window.id, url: setupPage });
+}
+
+// One check at a time, so a window opening during the installation does not
+// open the page twice.
+let prompting = Promise.resolve();
+function promptSetup() {
+  prompting = prompting.then(promptSetupNow).catch(() => {});
+  return prompting;
+}
+
+chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   sync.note({ type: 'installed', reason });
+  if (reason !== 'install') return;
+  const { setupPending } = await chrome.storage.local.get('setupPending');
+  if (setupPending === undefined) await chrome.storage.local.set({ setupPending: true });
+  await promptSetup();
 });
+chrome.windows.onCreated.addListener(() => promptSetup(), normalWindows);
 chrome.runtime.onStartup.addListener(layoutChanged);
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (message === 'summon' && sender.tab) sync.note({ type: 'summon', tabId: sender.tab.id, windowId: sender.tab.windowId });
