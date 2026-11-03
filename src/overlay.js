@@ -7,6 +7,9 @@ import { quickActions } from './quick-actions.js';
 // (popup), or as a tab of its own that the closing button leaves (tab).
 const params = new URLSearchParams(location.search);
 const mode = params.get('mode') ?? 'tab';
+// The tab the overlay was opened for is given up for whatever is picked: the
+// overlay's own tab, or the page the toolbar button's second click closes.
+const replacing = mode === 'tab' || params.get('replace') === '1';
 const placeholderPage = chrome.runtime.getURL('src/placeholder.html');
 const overlayPage = chrome.runtime.getURL('src/overlay.html');
 
@@ -40,6 +43,13 @@ function isOverlay(tab) {
   return (tab.pendingUrl || tab.url || '').startsWith(overlayPage);
 }
 
+// An action's icon, drawn in the muted grey of the extension's glyphs from
+// the path its definition carries.
+function glyphUrl(path) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#8b8b93" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${path}"/></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
 function iconFor(url, favIconUrl) {
   if (favIconUrl && !favIconUrl.startsWith('chrome://')) return favIconUrl;
   return chrome.runtime.getURL(`/_favicon/?${new URLSearchParams({ pageUrl: url, size: 32 })}`);
@@ -71,21 +81,21 @@ async function forgetQuery() {
   await chrome.storage.session.remove('overlayQuery');
 }
 
-// A page picked in a tab of its own replaces that tab; elsewhere it opens in
-// a new tab, as Zen opens it.
+// A page picked loads in the tab being given up; elsewhere it opens in a new
+// tab, as Zen opens it.
 async function openAddress(url) {
-  if (mode === 'tab') await chrome.tabs.update(target.id, { url });
+  if (replacing) await chrome.tabs.update(target.id, { url });
   else await chrome.tabs.create({ windowId: target.windowId, url });
 }
 
 async function search(text) {
-  if (mode === 'tab') await chrome.search.query({ text, tabId: target.id });
+  if (replacing) await chrome.search.query({ text, tabId: target.id });
   else await chrome.search.query({ text, disposition: 'NEW_TAB' });
 }
 
-// Leaves the overlay's own tab for another one, which makes it pointless.
+// Switching to another tab closes the tab being given up.
 async function leaveOwnTab() {
-  if (mode === 'tab') await chrome.tabs.remove(target.id);
+  if (replacing) await chrome.tabs.remove(target.id);
 }
 
 async function selectTab(tab) {
@@ -129,7 +139,8 @@ function actionItems(text) {
     .slice(0, MAX_ACTIONS)
     .map(({ action, score }) => ({
       title: action.label,
-      icon: chrome.runtime.getURL('icons/icon-32.png'),
+      icon: glyphUrl(action.glyph),
+      glyph: true,
       kind: 'Action',
       pick: () => action.run(target),
     }));
@@ -259,7 +270,32 @@ document.addEventListener('mousedown', (event) => {
 
 window.addEventListener('focus', () => query.focus());
 
+const setup = document.getElementById('setup');
+
+// The row stays until the overlay is on Ctrl+T or the row is dismissed.
+async function offerSetup() {
+  const [commands, { setupDismissed }] = await Promise.all([
+    chrome.commands.getAll(),
+    chrome.storage.local.get('setupDismissed'),
+  ]);
+  const command = commands.find((candidate) => candidate.name === 'open-overlay');
+  setup.hidden = setupDismissed || command?.shortcut === 'Ctrl+T';
+}
+
+for (const button of setup.querySelectorAll('button')) {
+  button.addEventListener('mousedown', (event) => event.preventDefault());
+}
+document.getElementById('setup-open').addEventListener('click', async () => {
+  await chrome.tabs.create({ url: chrome.runtime.getURL('src/welcome.html'), windowId: target?.windowId });
+  close();
+});
+document.getElementById('setup-dismiss').addEventListener('click', async () => {
+  setup.hidden = true;
+  await chrome.storage.local.set({ setupDismissed: true });
+});
+
 async function start() {
+  offerSetup();
   const self = mode === 'tab' ? await chrome.tabs.getCurrent() : null;
   [tabs, { pins = [] }] = await Promise.all([
     chrome.tabs.query({ windowType: 'normal' }),

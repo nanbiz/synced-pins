@@ -9,9 +9,17 @@
 </head>
 <body>
   <div id="box" role="dialog" aria-label="Go to">
-    <input id="query" type="text" autocomplete="off" spellcheck="false" aria-label="Search or enter address" autofocus>
+    <div id="bar">
+      <img src="search.svg" alt="">
+      <input id="query" type="text" autocomplete="off" spellcheck="false" placeholder="Search or enter address" aria-label="Search or enter address" autofocus>
+    </div>
     <div id="pins"></div>
     <div id="results" role="listbox"></div>
+    <div id="setup" hidden>
+      <span>Open this with <kbd>Ctrl</kbd>+<kbd>T</kbd></span>
+      <button id="setup-open" type="button">Set up</button>
+      <button id="setup-dismiss" type="button" aria-label="Dismiss">✕</button>
+    </div>
   </div>
 </body>
 </html>

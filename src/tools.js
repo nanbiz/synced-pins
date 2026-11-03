@@ -23,8 +23,9 @@ function isOverlayTab(tab) {
   return (tab.pendingUrl || tab.url || '').startsWith(chrome.runtime.getURL(overlayPath));
 }
 
-// Opens the overlay over the page in the tab, centred in it, or closes it
-// where it is open already. Runs in the page, so it is self-contained.
+// Opens the overlay over the page in the tab, centred over the page dimmed and
+// blurred as Zen does, or closes it where it is open already. Runs in the
+// page, so it is self-contained.
 function toggleInPage(path, query) {
   const id = 'synced-pins-overlay';
   const open = document.getElementById(id);
@@ -37,7 +38,8 @@ function toggleInPage(path, query) {
   frame.src = `${chrome.runtime.getURL(path)}?${query}`;
   frame.allow = 'clipboard-write';
   frame.style.cssText = 'all:initial;position:fixed;inset:0;width:100vw;height:100vh;border:0;'
-    + 'margin:0;padding:0;background:transparent;color-scheme:normal;z-index:2147483647';
+    + 'margin:0;padding:0;background:rgb(0 0 0 / 0.45);backdrop-filter:blur(3px);color-scheme:light dark;'
+    + 'z-index:2147483647';
   const focusedBefore = document.activeElement;
   const close = () => {
     window.removeEventListener('message', onMessage);
@@ -108,29 +110,26 @@ function closableTabs(tabs) {
   return { tabs: loose.filter((tab) => tab === current), current: true };
 }
 
-export async function closeTabs(tab) {
+// The overlay's Close Other Tabs closes only the others; the button's second
+// click gives up the selected tab too.
+export async function closeTabs(tab, { othersOnly = false } = {}) {
   const tabs = await chrome.tabs.query({ windowId: tab.windowId });
   const closable = closableTabs(tabs);
-  if (closable.tabs.length === 0) return;
+  if (closable.tabs.length === 0 || (closable.current && othersOnly)) return;
   if (!closable.current) {
     await chrome.tabs.remove(closable.tabs.map((other) => other.id));
     return;
   }
-  // The selected tab goes too. A pin open in this window takes its place,
-  // so no pin moves here from another window, with the overlay over it to
-  // pick where to go; without one, the overlay itself takes the tab's place.
-  const { pins = [] } = await chrome.storage.session.get('pins');
-  const ids = new Set(tabs.map((other) => other.id));
-  const pin = pins.find((candidate) => !candidate.closed && candidate.windowId === tab.windowId && ids.has(candidate.tabId));
-  if (pin) {
-    const live = tabs.find((other) => other.id === pin.tabId);
-    await chrome.tabs.update(live.id, { active: true });
+  // The selected tab goes too, once the overlay drawn over it has been told
+  // where to go instead; Escape keeps it. Where the page cannot host the
+  // overlay, the overlay takes the tab's place at once.
+  try {
+    const query = new URLSearchParams({ mode: 'frame', replace: '1', tab: tab.id, window: tab.windowId }).toString();
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: toggleInPage, args: [overlayPath, query] });
+  } catch {
+    await chrome.tabs.create({ windowId: tab.windowId, index: tab.index + 1, active: true, url: overlayUrl('tab', tab) });
     await chrome.tabs.remove(tab.id);
-    await openOverlayPopup(live);
-    return;
   }
-  await chrome.tabs.create({ windowId: tab.windowId, index: tab.index + 1, active: true, url: overlayUrl('tab', tab) });
-  await chrome.tabs.remove(tab.id);
 }
 
 // The button shows how many tabs a click closes in the window it sits in.

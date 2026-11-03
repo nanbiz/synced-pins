@@ -56,7 +56,7 @@ const pageUrl = (name) => `${origin}/${name}`;
 // chrome.runtime.reload(). On restart the profile reopens its last session
 // when restoreSession is set and otherwise follows Chromium's default of
 // opening a New Tab page.
-async function start({ restoreSession = false, sandbox, extension = extensionPath, installing = !sandbox, keepWelcome = false } = {}) {
+async function start({ restoreSession = false, sandbox, extension = extensionPath } = {}) {
   const fresh = !sandbox;
   if (fresh) {
     sandbox = await createSandbox();
@@ -77,25 +77,12 @@ async function start({ restoreSession = false, sandbox, extension = extensionPat
     const worker = extension === extensionPath
       ? await readyWorker(browser)
       : await browser.extensionWorker();
-    if (extension === extensionPath && installing && !keepWelcome) await closeWelcome(worker);
     return { sandbox, browser, worker };
   } catch (error) {
     await browser?.kill();
     if (fresh) await sandbox.remove();
     throw error;
   }
-}
-
-// The welcome page the extension opens when it is installed, closed so the
-// windows hold only what a test opens.
-async function closeWelcome(worker) {
-  await waitFor(() => worker.run(async () => (await chrome.storage.session.get('welcomeShown')).welcomeShown === true),
-    { timeout: STARTUP_TIMEOUT_MS });
-  await worker.run(async () => {
-    const welcome = chrome.runtime.getURL('src/welcome.html');
-    const tabs = (await chrome.tabs.query({})).filter((tab) => (tab.pendingUrl || tab.url).startsWith(welcome));
-    if (tabs.length > 0) await chrome.tabs.remove(tabs.map((tab) => tab.id));
-  });
 }
 
 // The extension's worker once it has built its pin list. After a reload the
@@ -573,7 +560,7 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
       await pin(second.id, z);
     }, pageUrl('x'), pageUrl('y'), pageUrl('z'));
     await waitFor(async () => (await current.browser.targets()).filter((target) => target.title === 'x').length === 2);
-    const { worker: synced } = await restart({ extension: extensionPath, installing: true });
+    const { worker: synced } = await restart({ extension: extensionPath });
     let areas;
     await waitFor(async () => {
       areas = (await layout(synced)).map(pinnedArea);
@@ -1007,6 +994,21 @@ async function pressOverlayShortcut(browser, name) {
   }
 }
 
+// Clicks the toolbar button in the tab's window, the way its click reaches
+// the extension: as a closeTabs message, sent from an extension page in a
+// window of its own that goes again afterwards.
+async function clickButton(browser, worker, tabId) {
+  const welcome = await worker.run(async () => {
+    const window = await chrome.windows.create({ url: chrome.runtime.getURL('src/welcome.html'), focused: false });
+    return { windowId: window.id, tabId: window.tabs[0].id };
+  });
+  // Vivaldi leaves a page that is attached to while it loads unanswered.
+  await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).status === 'complete', welcome.tabId));
+  const page = await browser.page((url) => url.includes('/src/welcome.html'));
+  await page.run((id) => chrome.runtime.sendMessage({ type: 'closeTabs', tabId: id }), tabId);
+  await worker.run((id) => chrome.windows.remove(id), welcome.windowId);
+}
+
 async function typeInto(frame, text) {
   await current.browser.connection.send('Input.insertText', { text }, frame.sessionId);
 }
@@ -1083,7 +1085,7 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).pinned, tab.id));
   });
 
-  overlayTest('closing other tabs leaves pins and tab groups, then closes the selected tab for the overlay', async () => {
+  overlayTest('closing other tabs leaves pins and tab groups, and the button\'s second click gives up the selected tab for a pick in the overlay', async () => {
     const { worker, browser } = await open();
     const { windows: [A], a } = await threeWindowsWithPins(worker);
     await focus(worker, A);
@@ -1106,15 +1108,46 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     });
     assert.equal(await worker.run((id) => chrome.tabs.get(id).then(() => true, () => false), loose), false);
     await waitFor(async () => (await badge()) === '1');
-    // The second time the selected tab goes too, and the pin live in this
-    // window is selected in its place.
-    const second = await pressOverlayShortcut(browser, 'current');
-    await typeInto(second, 'close other');
-    await waitFor(async () => (await overlayResults(second))[0]?.title === 'Close Other Tabs');
+    // Named in the overlay once only the selected tab is left, it closes
+    // nothing more.
+    const again = await pressOverlayShortcut(browser, 'current');
+    await typeInto(again, 'close other');
+    await waitFor(async () => (await overlayResults(again))[0]?.title === 'Close Other Tabs');
+    await again.press('Enter', { wait: false });
+    await waitFor(async () => !(await overlayOpen(browser)));
+    assert.equal(await worker.run((id) => chrome.tabs.get(id).then(() => true, () => false), current), true);
+    // The button's second click opens the overlay over the selected tab,
+    // which goes once a pin is picked there.
+    await clickButton(browser, worker, current);
+    const second = await overlayFrame(browser);
+    assert.match((await browser.targets()).find((info) => info.type === 'iframe' && info.url.includes('/src/overlay.html')).url, /replace=1/);
+    await second.press('ArrowDown');
     await second.press('Enter', { wait: false });
     await waitFor(async () => (await worker.run((id) => chrome.tabs.get(id).then(() => true, () => false), current)) === false);
     await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).active, a));
     assert.equal(await worker.run((id) => chrome.tabs.get(id).then(() => true, () => false), grouped), true);
+  });
+
+  overlayTest('an address picked in the overlay of the button\'s second click loads in the tab it was opened over', async () => {
+    const { worker, browser } = await open();
+    const A = await createWindow(worker, 'A');
+    const [tab] = await tabsIn(worker, A);
+    // Escape keeps the tab.
+    const first = await pressOverlayShortcut(browser, 'A');
+    await first.press('Escape', { wait: false });
+    await waitFor(async () => !(await overlayOpen(browser)));
+    await clickButton(browser, worker, tab.id);
+    const kept = await overlayFrame(browser);
+    await kept.press('Escape', { wait: false });
+    await waitFor(async () => !(await overlayOpen(browser)));
+    assert.equal(await worker.run((id) => chrome.tabs.get(id).then(() => true, () => false), tab.id), true);
+    await clickButton(browser, worker, tab.id);
+    const frame = await overlayFrame(browser);
+    await typeInto(frame, pageUrl('there').replace('http://', ''));
+    await waitFor(async () => (await overlayResults(frame))[0]?.kind === 'Open');
+    await frame.press('Enter', { wait: false });
+    await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).title === 'there', tab.id));
+    assert.equal((await tabsIn(worker, A)).length, 1);
   });
 
   test('over a page the browser keeps to itself the overlay opens as the button\'s popup, or as a tab without popups', async () => {
@@ -1136,15 +1169,14 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     }
   });
 
-  overlayTest('closing the last tab of a window that holds no pin of its own leaves the overlay in its place', async () => {
+  test('the button\'s second click on a page the overlay cannot be drawn over leaves the overlay in its place', async () => {
     const { worker, browser } = await open();
     const { windows: [, B] } = await threeWindowsWithPins(worker);
     await focus(worker, B);
     const own = await tabIdByTitle(worker, B, 'B');
-    const frame = await pressOverlayShortcut(browser, 'B');
-    await typeInto(frame, 'close other');
-    await waitFor(async () => (await overlayResults(frame))[0]?.title === 'Close Other Tabs');
-    await frame.press('Enter', { wait: false });
+    // Without the page granted by a shortcut or click, the overlay cannot be
+    // drawn over it and takes the tab's place.
+    await clickButton(browser, worker, own);
     await waitFor(async () => {
       const tabs = await tabsIn(worker, B);
       return !tabs.some((tab) => tab.id === own)
@@ -1184,12 +1216,27 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     await current.browser.connection.send('Target.closeTarget', { targetId: privatePage.targetId });
   });
 
-  test('installing opens the welcome page, which shows the overlay\'s shortcut', async () => {
-    const { browser, worker } = await open({ keepWelcome: true });
-    // Vivaldi leaves a page that is attached to while it loads unanswered.
+  overlayTest('the overlay offers to go on Ctrl+T until dismissed, and its page shows the shortcut', async () => {
+    const { worker, browser } = await open();
+    await createWindow(worker, 'A');
+    const frame = await pressOverlayShortcut(browser, 'A');
+    await waitFor(() => frame.run(() => !document.getElementById('setup').hidden));
+    await frame.run(() => document.getElementById('setup-open').click());
     await waitFor(() => worker.run(async () => (await chrome.tabs.query({})).some((tab) => tab.url.includes('/src/welcome.html') && tab.status === 'complete')));
     const page = await browser.page((url) => url.includes('/src/welcome.html'));
     await waitFor(async () => (await page.run(() => document.getElementById('shortcut').textContent)) === 'Ctrl + Shift + Space');
     assert.equal(await page.run(() => document.getElementById('ctrl-t').hidden), false);
+    await worker.run(async () => {
+      const tabs = await chrome.tabs.query({ url: chrome.runtime.getURL('src/welcome.html') });
+      await chrome.tabs.remove(tabs.map((tab) => tab.id));
+    });
+    const again = await pressOverlayShortcut(browser, 'A');
+    await waitFor(() => again.run(() => !document.getElementById('setup').hidden));
+    await again.run(() => document.getElementById('setup-dismiss').click());
+    await again.press('Escape', { wait: false });
+    await waitFor(async () => !(await overlayOpen(browser)));
+    const third = await pressOverlayShortcut(browser, 'A');
+    await waitFor(() => third.run(() => document.getElementById('query') === document.activeElement));
+    assert.equal(await third.run(() => document.getElementById('setup').hidden), true);
   });
 });

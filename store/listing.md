@@ -21,9 +21,9 @@ The tab handling of the Zen browser in Chrome: the same pinned tabs in every win
 
 Pinned tabs in every window. Each pinned tab is open in one window. Your other windows show it in the same place, with its icon, and selecting it there brings the page over as it is: nothing reloads, a video keeps playing, a half-typed message stays. Pin, unpin or reorder a pinned tab in any window and every window follows. Closing a pinned tab closes its page, but the pin stays: select it again and it opens at the address it was pinned at. Unpin it to remove it.
 
-New tab overlay. Press Ctrl+Shift+Space, or Ctrl+T once you set it on the welcome page, and a search bar opens over the page. Type an address or a search and press Enter to open it in a new tab, type part of a tab's title to switch to it, or type an action such as pin tab, duplicate or reload to run it. Escape closes it without leaving a tab behind.
+New tab overlay. Press Ctrl+Shift+Space, or Ctrl+T once you set it up from the overlay, and a search bar opens over the page. Type an address or a search and press Enter to open it in a new tab, type part of a tab's title to switch to it, or type an action such as pin tab, duplicate or reload to run it. Escape closes it without leaving a tab behind.
 
-Clearing tabs. The toolbar button closes every tab of its window that is neither pinned nor in a tab group, apart from the one you are on, and shows how many. Click it again and the tab you are on goes too.
+Clearing tabs. The toolbar button closes every tab of its window that is neither pinned nor in a tab group, apart from the one you are on, and shows how many. Click it again and the overlay opens over the tab you are on, which gives way to whatever you pick there.
 
 Nothing is collected or sent anywhere. Source: https://github.com/nanbiz/synced-pins
 

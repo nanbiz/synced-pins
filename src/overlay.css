@@ -30,6 +30,7 @@ body {
    address bar does; in the toolbar popup or a tab of its own it fills the
    space it has. */
 body.frame {
+  overflow: hidden;
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -63,16 +64,34 @@ body.tab #box {
   overflow: hidden;
 }
 
+#bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+}
+
+#bar img {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
 #query {
   box-sizing: border-box;
-  width: 100%;
-  padding: 16px 18px;
+  flex: 1;
+  min-width: 0;
+  padding: 16px 0;
   border: 0;
   outline: none;
   background: transparent;
   color: inherit;
   font: inherit;
   font-size: 1.15em;
+}
+
+#query::placeholder {
+  color: var(--muted);
 }
 
 #pins:not(:empty),
@@ -173,4 +192,54 @@ body.tab #box {
 .row.selected .kind {
   color: #fff;
   opacity: 1;
+}
+
+/* While the overlay is not on Ctrl+T, a row at its foot leads to the page
+   that puts it there. */
+#setup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px 9px 18px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#setup[hidden] {
+  display: none;
+}
+
+#setup span {
+  flex: 1;
+}
+
+#setup kbd {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  color: var(--text);
+  font: 12px ui-monospace, monospace;
+}
+
+#setup button {
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+#setup-open {
+  padding: 5px 12px;
+  background: var(--selected) !important;
+  color: #fff !important;
+}
+
+#setup-dismiss {
+  padding: 4px 6px;
+  font-size: 15px !important;
 }

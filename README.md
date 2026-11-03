@@ -35,7 +35,7 @@ On pages a browser keeps extensions out of, such as its settings, the New Tab pa
 
 ### Putting it on Ctrl+T
 
-Browsers keep Ctrl+T for themselves: an extension cannot ask for it, and the shortcuts page at `chrome://extensions/shortcuts` cannot record it. It can still be set once by hand. The welcome page the extension opens has a **Use Ctrl+T** button that copies the line below and opens `chrome://extensions`; there, press F12, open **Console**, paste and press Enter:
+Browsers keep Ctrl+T for themselves: an extension cannot ask for it, and the shortcuts page at `chrome://extensions/shortcuts` cannot record it. It can still be set once by hand. While it is not set, the overlay shows **Set up** at its foot, which opens a page with a **Use Ctrl+T** button that copies the line below and opens `chrome://extensions`; there, press F12, open **Console**, paste and press Enter:
 
 ```js
 chrome.developerPrivate.updateExtensionCommand({ extensionId: 'ofcghgcepialnjkeghndofphhdaokdeg', commandName: 'open-overlay', keybinding: 'Ctrl+T' })
@@ -45,7 +45,7 @@ From then on Ctrl+T opens the overlay and no new tab. A copy loaded unpacked has
 
 ## Clearing tabs
 
-The toolbar button closes every tab of its window that is neither pinned nor in a tab group, apart from the one you are on, and its badge shows how many that is. Click it once more and the tab you are on closes too: a pinned tab that is open in this window is selected in its place, with the overlay over it, and without one the overlay takes the closed tab's place. Pinned tabs and tab groups always stay.
+The toolbar button closes every tab of its window that is neither pinned nor in a tab group, apart from the one you are on, and its badge shows how many that is. Click it once more and the overlay opens over the tab you are on, which goes for whatever you pick there: an address or search loads in its place, and switching to another tab or pin closes it. Escape keeps it. On a page the overlay cannot be drawn over, the overlay takes the tab's place at once. Pinned tabs and tab groups always stay.
 
 ## Permissions
 
