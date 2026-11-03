@@ -1091,6 +1091,7 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     for (let index = 0; index < rows.findIndex((row) => row.title === 'other'); index++) await frame.press('ArrowDown');
     await frame.press('Enter', { wait: false });
     await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).active, other));
+    await waitFor(async () => !(await overlayOpen(browser)));
     // A pin is picked in the window the overlay was opened in, which brings
     // its live page there.
     await focus(worker, B);
@@ -1249,11 +1250,14 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     const { worker, browser } = await open();
     const A = await createWindow(worker, 'A');
     const [before] = await tabsIn(worker, A);
-    const created = await worker.run(async (windowId) => (await chrome.tabs.create({ windowId, url: 'chrome://newtab/' })).id, A);
-    await waitFor(() => worker.run(async (id) => {
-      const tab = await chrome.tabs.get(id);
-      return (tab.pendingUrl || tab.url).includes('/src/overlay.html?mode=tab&newtab=1') && tab.status === 'complete';
-    }, created));
+    await worker.run(async (windowId) => chrome.tabs.create({ windowId, url: 'chrome://newtab/' }), A);
+    let created;
+    await waitFor(async () => {
+      created = await worker.run(async (windowId) => (await chrome.tabs.query({ windowId }))
+        .find((tab) => (tab.pendingUrl || tab.url).includes('/src/overlay.html?mode=tab&newtab=1') && tab.status === 'complete')?.id, A);
+      return created;
+    });
+    assert.equal((await tabsIn(worker, A)).length, 2);
     const page = await browser.page((url) => url.includes('/src/overlay.html?mode=tab&newtab=1'));
     await waitFor(() => page.run(() => document.activeElement?.id === 'query'));
     await page.press('Escape', { wait: false });
@@ -1316,6 +1320,50 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     const created = await worker.run(async (windowId) => (await chrome.tabs.create({ windowId, url: 'chrome://newtab/', active: false })).id, A);
     await waitFor(async () => (await worker.run((id) => chrome.tabs.get(id).then(() => true, () => false), created)) === false);
     assert.equal((await tabsIn(worker, A)).length, 1);
+  });
+
+  test('the browser\'s own new tab becomes the overlay with the keyboard in its bar', async () => {
+    const { worker, browser } = await open();
+    const A = await createWindow(worker, 'A');
+    await focus(worker, A);
+    const page = await browser.page(pageUrl('A'));
+    await current.browser.connection.send('Page.bringToFront', {}, page.sessionId);
+    const overlayTab = () => worker.run(async (windowId) => (await chrome.tabs.query({ windowId }))
+      .find((tab) => (tab.pendingUrl || tab.url).includes('/src/overlay.html?mode=tab&newtab=1') && tab.status === 'complete')?.id, A);
+    // Ctrl+T, still the browser's own here.
+    for (let attempt = 1; !(await overlayTab()); attempt++) {
+      pressCtrlT(page);
+      await waitFor(overlayTab, { timeout: 5_000 }).catch((error) => {
+        if (attempt === SHORTCUT_TRIES) throw error;
+      });
+    }
+    const overlay = await browser.page((url) => url.includes('/src/overlay.html?mode=tab&newtab=1'));
+    await waitFor(() => overlay.run(() => document.hasFocus() && document.activeElement?.id === 'query'));
+    assert.equal((await tabsIn(worker, A)).length, 2);
+  });
+
+  overlayTest('with pages allowed, a New Tab page goes and the overlay opens over the page before it', async () => {
+    // A copy that asks for every page up front, which an unpacked extension
+    // is granted without the dialog the overlay's Allow opens.
+    const copy = await mkdtemp(join(tmpdir(), 'synced-pins-pages-'));
+    try {
+      await cp(extensionPath, copy, { recursive: true, filter: (path) => !/\/(node_modules|dist|\.git)(\/|$)/.test(path) });
+      const manifest = JSON.parse(await readFile(join(copy, 'manifest.json'), 'utf8'));
+      manifest.host_permissions = ['<all_urls>'];
+      delete manifest.optional_host_permissions;
+      await writeFile(join(copy, 'manifest.json'), JSON.stringify(manifest));
+      const { worker, browser } = await open({ extension: copy });
+      const A = await createWindow(worker, 'A');
+      const [before] = await tabsIn(worker, A);
+      await focus(worker, A);
+      await worker.run(async (windowId) => chrome.tabs.create({ windowId, url: 'chrome://newtab/' }), A);
+      const frame = await overlayFrame(browser);
+      await waitFor(() => frame.run(() => document.activeElement?.id === 'query'));
+      const tabs = await tabsIn(worker, A);
+      assert.deepEqual(tabs.map((tab) => [tab.id, tab.active]), [[before.id, true]]);
+    } finally {
+      await rm(copy, { recursive: true, force: true });
+    }
   });
 
   test('installing opens the page that puts the overlay on Ctrl+T, once', async () => {

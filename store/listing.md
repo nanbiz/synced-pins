@@ -38,6 +38,7 @@ Nothing is collected or sent anywhere. Source: https://github.com/nanbiz/synced-
 - search: Sends a search the user picks in the new tab overlay to the browser's default search engine.
 - history (optional, asked for from the overlay): Lets the new tab overlay suggest sites and pages the user visited for what they type, once the user allows it; nothing is kept or sent.
 - bookmarks (optional, asked for from the overlay): Lets the new tab overlay suggest the user's bookmarks for what they type, once the user allows it; nothing is kept or sent.
+- Host permission <all_urls> (optional, asked for from the overlay): Lets a tab opened on the New Tab page close at once and the new tab overlay open over the page the user was on instead, once the user allows it; the overlay is only drawn over the page, which is not read.
 - Remote code: No.
 - Data usage: no data collected; certify the three statements (not sold, not used for unrelated purposes, not used for creditworthiness).
 - Privacy policy: https://github.com/nanbiz/synced-pins/blob/main/PRIVACY.md

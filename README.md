@@ -26,7 +26,7 @@ Each pinned tab is open in one window. Your other windows show it in the same pl
 Press **Ctrl+Shift+Space** and a search bar opens in the middle of the page instead of a new tab. Nothing is opened until you pick something:
 
 - With nothing typed it lists your pinned tabs.
-- A tab opened with the tab strip's **+** or the menu, on the New Tab page, becomes the overlay too; Escape closes it and goes back to the tab you were on.
+- A tab opened with the tab strip's **+** or the menu, on the New Tab page, becomes the overlay too; Escape closes it and goes back to the tab you were on. Once you click **Allow** on its *Open over the page instead of a tab* row, the New Tab page closes at once and the overlay opens over the page you were on.
 - Type an address or a search and press Enter to open it in a new tab. The search goes to your browser's default search engine.
 - Type part of a tab's title or address to switch to that tab, in any window. Picking a pinned tab brings its page into the window you are in.
 - Once you click **Include** on the overlay's *History and bookmarks* row and allow it, a site you have visited whose name starts with what you type comes first (*y* offers youtube.com), and visited pages and bookmarks follow the open tabs.

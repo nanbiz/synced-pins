@@ -26,10 +26,11 @@ function isOverlayTab(tab) {
 // Opens the overlay over the page in the tab, centred over the page dimmed and
 // blurred as Zen does, or closes it where it is open already. Runs in the
 // page, so it is self-contained.
-function toggleInPage(path, query) {
+function toggleInPage(path, query, openOnly = false) {
   const id = 'synced-pins-overlay';
   const open = document.getElementById(id);
   if (open) {
+    if (openOnly) return 'open';
     open.remove();
     return 'closed';
   }
@@ -51,6 +52,10 @@ function toggleInPage(path, query) {
   function onMessage(event) {
     if (event.source !== frame.contentWindow) return;
     if (event.data === 'synced-pins:ready') frame.style.opacity = '1';
+    if (event.data === 'synced-pins:hide') {
+      frame.style.opacity = '0';
+      requestAnimationFrame(() => requestAnimationFrame(() => frame.contentWindow?.postMessage('synced-pins:hidden', '*')));
+    }
     if (event.data === 'synced-pins:close') close();
   }
   window.addEventListener('message', onMessage);
@@ -76,17 +81,50 @@ const NEW_TAB_PAGE = /^[a-z]+:\/\/(newtab|new-tab-page|startpage|vivaldi-webui\/
 // own; back is the tab that was selected before it, which Escape returns to.
 // A pinned one is left alone: Chromium puts those where it closed this
 // extension's placeholders, and the pin list unpins them itself.
+const replacing = new Set();
+// Drawing on any page, which the user can allow from the overlay.
+const PAGES = { origins: ['<all_urls>'] };
+
 export async function replaceNewTab(tab, url, back) {
-  if (tab.pinned || !NEW_TAB_PAGE.test(url ?? '')) return;
+  // The browser reports a new tab more than once (created, then its address),
+  // and each report would open an overlay of its own.
+  if (tab.pinned || replacing.has(tab.id) || !NEW_TAB_PAGE.test(url ?? '')) return;
+  replacing.add(tab.id);
+  setTimeout(() => replacing.delete(tab.id), 5_000);
   // A browser that keeps Ctrl+T for itself, such as Vivaldi, opens its new
   // tab on the same key that opened the overlay; that tab is not wanted.
   if (Date.now() - overlayCommandAt < SAME_KEY_MS) {
     await chrome.tabs.remove(tab.id).catch(() => {});
     return;
   }
+  // Where the user lets the extension draw on pages, the New Tab page goes
+  // and the overlay opens over the page they were on; elsewhere, and over
+  // pages no extension may draw on, it opens as a tab.
+  if (tab.active && back !== undefined && await chrome.permissions.contains(PAGES).catch(() => false)) {
+    try {
+      const page = await chrome.tabs.get(back);
+      if (page.windowId === tab.windowId) {
+        const frameQuery = new URLSearchParams({ mode: 'frame', tab: page.id, window: page.windowId }).toString();
+        await chrome.scripting.executeScript({ target: { tabId: page.id }, func: toggleInPage, args: [overlayPath, frameQuery, true], injectImmediately: true });
+        await chrome.tabs.update(page.id, { active: true });
+        await chrome.tabs.remove(tab.id);
+        return;
+      }
+    } catch {
+      // A page the overlay cannot be drawn over.
+    }
+  }
   const query = new URLSearchParams({ mode: 'tab', newtab: '1' });
   if (back !== undefined) query.set('back', back);
-  await chrome.tabs.update(tab.id, { url: chrome.runtime.getURL(`${overlayPath}?${query}`) }).catch(() => {});
+  // The browser keeps the keyboard in its address bar on a New Tab page, also
+  // once the tab loads another page, so the overlay opens as a tab of its own
+  // in the same place, which takes the keyboard, and the New Tab page goes.
+  try {
+    await chrome.tabs.create({ windowId: tab.windowId, index: tab.index, active: tab.active, url: chrome.runtime.getURL(`${overlayPath}?${query}`) });
+    await chrome.tabs.remove(tab.id);
+  } catch {
+    // The window or the tab went meanwhile.
+  }
 }
 
 // The overlay opens in the page where the browser lets an extension draw

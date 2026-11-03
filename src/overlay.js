@@ -63,25 +63,51 @@ function siteOf(url) {
 // History and bookmarks, once the user has let the extension read them. A
 // site whose name starts with what is typed is offered as the site itself,
 // ahead of the search, as the address bar completes it; single pages from
-// history and bookmarks come after the open tabs. They arrive asynchronously,
-// so each query's are kept and the list is drawn again when they come.
+// history and bookmarks come after the open tabs. Searching history in the
+// browser takes some 150 ms a word and the searches queue up while typing, so
+// the most recent pages and every bookmark are read once when the overlay
+// opens and each query is matched against them here.
 const MAX_SITES = 2;
 const MAX_PAGES = 4;
 const MAX_BOOKMARKS = 3;
-const recall = { text: null, sites: [], pages: [] };
+// The whole history is read, which takes the browser most of a second for
+// ten thousand pages; the last one read is kept for the session, so the
+// overlay starts from it at once and reads it afresh behind.
+const FIRST_PAGES = 2000;
+const ALL_PAGES = 1_000_000;
+let remembered = null;
 
-function recalled(text) {
-  if (recall.text !== text) {
-    recall.text = text;
-    recall.sites = [];
-    recall.pages = [];
-    recallFor(text).then((found) => {
-      if (recall.text !== text) return;
-      Object.assign(recall, found);
-      if (found.sites.length + found.pages.length > 0) render();
-    }, () => {});
+// An entry as matching needs it: its words lower-cased and its site, worked
+// out once rather than on every key.
+function indexed(entry) {
+  const title = entry.title ?? '';
+  return { url: entry.url, title, words: `${title} ${entry.url}`.toLowerCase(), host: hostOf(entry.url), weight: (entry.visitCount ?? 1) + 2 * (entry.typedCount ?? 0) };
+}
+
+function keep(history, bookmarks) {
+  const web = (entry) => /^https?:/.test(entry.url ?? '');
+  remembered = {
+    history: history.filter(web).map(indexed).sort((a, b) => b.weight - a.weight),
+    bookmarks: bookmarks.filter(web).map(indexed),
+  };
+  if (query.value.trim()) render();
+}
+
+async function remember() {
+  if (!chrome.history && !chrome.bookmarks) return;
+  const { recallCache } = await chrome.storage.session.get('recallCache');
+  if (recallCache) keep(recallCache.history, recallCache.bookmarks);
+  const bookmarks = [];
+  if (chrome.bookmarks) {
+    const walk = (nodes) => nodes.forEach((node) => (node.url ? bookmarks.push(node) : walk(node.children ?? [])));
+    walk(await chrome.bookmarks.getTree().catch(() => []));
   }
-  return recall;
+  if (!chrome.history) return keep([], bookmarks);
+  if (!recallCache) keep(await chrome.history.search({ text: '', startTime: 0, maxResults: FIRST_PAGES }), bookmarks);
+  const history = await chrome.history.search({ text: '', startTime: 0, maxResults: ALL_PAGES });
+  keep(history, bookmarks);
+  const slim = (entry) => ({ url: entry.url, title: entry.title, visitCount: entry.visitCount, typedCount: entry.typedCount });
+  await chrome.storage.session.set({ recallCache: { history: history.map(slim), bookmarks: bookmarks.map(slim) } }).catch(() => {});
 }
 
 function hostOf(url) {
@@ -92,36 +118,53 @@ function hostOf(url) {
   }
 }
 
-async function recallFor(text) {
-  const [history, bookmarks] = await Promise.all([
-    chrome.history ? chrome.history.search({ text, startTime: 0, maxResults: 200 }) : [],
-    chrome.bookmarks ? chrome.bookmarks.search(text).catch(() => []) : [],
-  ]);
+function withoutFragment(url) {
+  return url.split('#')[0];
+}
+
+function recalled(text) {
+  if (!remembered) return { sites: [], pages: [] };
   const word = text.trim().toLowerCase();
-  const web = (entry) => entry.url && /^https?:/.test(entry.url);
+  const words = word.split(/\s+/);
   // Sites: hosts that start with the typed word, or have a part that does,
   // ranked by how often they were visited.
   const visits = new Map();
-  for (const entry of history.filter(web)) {
-    const host = hostOf(entry.url);
-    if (!host.split('.').some((part, index, parts) => parts.slice(index).join('.').startsWith(word))) continue;
-    const site = visits.get(host) ?? { host, origin: new URL(entry.url).origin, count: 0 };
-    site.count += (entry.visitCount ?? 1) + 2 * (entry.typedCount ?? 0);
-    visits.set(host, site);
+  const startsSite = (host) => host.startsWith(word) || host.includes(`.${word}`);
+  for (const entry of remembered.history) {
+    if (!startsSite(entry.host)) continue;
+    const site = visits.get(entry.host);
+    if (site) site.count += entry.weight;
+    else visits.set(entry.host, { host: entry.host, url: entry.url, count: entry.weight });
   }
   const sites = [...visits.values()]
     .sort((a, b) => (b.host.startsWith(word) - a.host.startsWith(word)) || b.count - a.count)
     .slice(0, MAX_SITES)
-    .map((site) => ({ title: site.host, url: `${site.origin}/`, favIconUrl: null, kind: 'Site', pick: () => openAddress(`${site.origin}/`) }));
-  const shown = new Set([...tabs.map((tab) => tab.url), ...pins.map((pin) => pin.url), ...sites.map((site) => site.url)]);
-  const take = (entries, max, kind) => entries
-    .filter(web)
-    .filter((entry) => containsWords(text, `${entry.title ?? ''} ${entry.url}`))
-    .filter((entry) => !shown.has(entry.url) && shown.add(entry.url))
-    .slice(0, max)
-    .map((entry) => ({ title: entry.title || siteOf(entry.url), url: entry.url, favIconUrl: null, kind, pick: () => openAddress(entry.url) }));
-  const ranked = [...history].sort((a, b) => (b.typedCount ?? 0) - (a.typedCount ?? 0) || (b.visitCount ?? 0) - (a.visitCount ?? 0));
-  return { sites, pages: [...take(ranked, MAX_PAGES, 'History'), ...take(bookmarks, MAX_BOOKMARKS, 'Bookmark')] };
+    .map((site) => {
+      const url = `${new URL(site.url).origin}/`;
+      return { title: site.host, url, favIconUrl: null, kind: 'Site', pick: () => openAddress(url) };
+    });
+  // A page shows once, whatever its fragment, and pages of one site with the
+  // same title, such as a page reached with different parameters, once too.
+  const shown = new Set();
+  const seen = (url, title) => {
+    const keys = [withoutFragment(url), `${hostOf(url)} ${title ?? ''}`];
+    if (keys.some((key) => shown.has(key))) return true;
+    keys.forEach((key) => shown.add(key));
+    return false;
+  };
+  for (const item of [...tabs, ...pins, ...sites.map((site) => ({ url: site.url, title: site.title }))]) {
+    if (item.url) shown.add(withoutFragment(item.url));
+  }
+  const take = (entries, max, kind) => {
+    const found = [];
+    for (const entry of entries) {
+      if (found.length === max) break;
+      if (!words.every((part) => entry.words.includes(part)) || seen(entry.url, entry.title)) continue;
+      found.push({ title: entry.title || siteOf(entry.url), url: entry.url, favIconUrl: null, kind, pick: () => openAddress(entry.url) });
+    }
+    return found;
+  };
+  return { sites, pages: [...take(remembered.history, MAX_PAGES, 'History'), ...take(remembered.bookmarks, MAX_BOOKMARKS, 'Bookmark')] };
 }
 
 // A pin's name: its own title, else that of its open tab, else its site.
@@ -331,6 +374,24 @@ let keyboardOnPins = false;
 async function pick(index) {
   const item = items[index];
   if (!item) return;
+  // Over a page the overlay is hidden, and that painted, before it acts: the
+  // page left behind keeps its last picture until it is shown again.
+  if (mode === 'frame') {
+    // The page confirms once it has painted the overlay hidden; a frame the
+    // browser no longer draws gets no animation frames of its own to wait on.
+    await new Promise((resolve) => {
+      const done = () => {
+        window.removeEventListener('message', onHidden);
+        resolve();
+      };
+      const onHidden = (event) => {
+        if (event.source === window.parent && event.data === 'synced-pins:hidden') done();
+      };
+      window.addEventListener('message', onHidden);
+      setTimeout(done, 100);
+      window.parent.postMessage('synced-pins:hide', '*');
+    });
+  }
   await forgetQuery();
   try {
     await item.pick();
@@ -408,6 +469,34 @@ document.getElementById('setup-dismiss').addEventListener('click', async () => {
   await chrome.storage.local.set({ setupDismissed: true });
 });
 
+const pagesOffer = document.getElementById('pages');
+const PAGES = { origins: ['<all_urls>'] };
+
+// Offered where the overlay had to open as a tab for a New Tab page, until
+// the user lets it draw on pages or dismisses the row.
+async function offerPages() {
+  if (mode !== 'tab' || params.get('newtab') !== '1') return;
+  const [allowed, { pagesDismissed }] = await Promise.all([
+    chrome.permissions.contains(PAGES),
+    chrome.storage.local.get('pagesDismissed'),
+  ]);
+  pagesOffer.hidden = allowed || pagesDismissed === true;
+}
+
+for (const button of pagesOffer.querySelectorAll('button')) {
+  button.addEventListener('mousedown', (event) => event.preventDefault());
+}
+document.getElementById('pages-allow').addEventListener('click', async () => {
+  const allowed = await chrome.permissions.request(PAGES).catch(() => false);
+  if (allowed) pagesOffer.hidden = true;
+  query.focus();
+});
+document.getElementById('pages-dismiss').addEventListener('click', async () => {
+  pagesOffer.hidden = true;
+  query.focus();
+  await chrome.storage.local.set({ pagesDismissed: true });
+});
+
 const historyOffer = document.getElementById('history');
 const RECALL = { permissions: ['history', 'bookmarks'] };
 
@@ -427,9 +516,8 @@ document.getElementById('history-allow').addEventListener('click', async () => {
   const allowed = await chrome.permissions.request(RECALL).catch(() => false);
   if (!allowed) return;
   historyOffer.hidden = true;
-  recall.text = null;
-  render();
   query.focus();
+  await remember();
 });
 document.getElementById('history-dismiss').addEventListener('click', async () => {
   historyOffer.hidden = true;
@@ -440,6 +528,8 @@ document.getElementById('history-dismiss').addEventListener('click', async () =>
 async function start() {
   offerSetup();
   offerHistory();
+  offerPages();
+  remember();
   const self = mode === 'tab' ? await chrome.tabs.getCurrent() : null;
   [tabs, { pins = [] }] = await Promise.all([
     chrome.tabs.query({ windowType: 'normal' }),
