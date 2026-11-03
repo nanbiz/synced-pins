@@ -1291,6 +1291,14 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
         const [first] = await overlayResults(frame);
         return first?.title === '127.0.0.1' && first.kind === 'Site';
       });
+      // The rest of the site's address is filled in, selected, after the typed
+      // text, so the next key replaces it.
+      await waitFor(() => frame.run(() => {
+        const input = document.getElementById('query');
+        return input.value === '127.0.0.1' && input.selectionStart === 3 && !document.getElementById('hint').hidden;
+      }));
+      await frame.press('Backspace');
+      assert.deepEqual(await frame.run(() => [document.getElementById('query').value, document.getElementById('hint').hidden]), ['127', true]);
     } finally {
       await rm(copy, { recursive: true, force: true });
     }

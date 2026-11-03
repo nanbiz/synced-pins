@@ -90,7 +90,10 @@ function keep(history, bookmarks) {
     history: history.filter(web).map(indexed).sort((a, b) => b.weight - a.weight),
     bookmarks: bookmarks.filter(web).map(indexed),
   };
-  if (query.value.trim()) render();
+  if (typed.trim()) {
+    render();
+    complete();
+  }
 }
 
 async function remember() {
@@ -134,14 +137,15 @@ function recalled(text) {
     if (!startsSite(entry.host)) continue;
     const site = visits.get(entry.host);
     if (site) site.count += entry.weight;
-    else visits.set(entry.host, { host: entry.host, url: entry.url, count: entry.weight });
+    // History is sorted by weight, so a site's first page is its most visited.
+    else visits.set(entry.host, { host: entry.host, url: entry.url, page: entry.title, count: entry.weight });
   }
   const sites = [...visits.values()]
     .sort((a, b) => (b.host.startsWith(word) - a.host.startsWith(word)) || b.count - a.count)
     .slice(0, MAX_SITES)
     .map((site) => {
       const url = `${new URL(site.url).origin}/`;
-      return { title: site.host, url, favIconUrl: null, kind: 'Site', pick: () => openAddress(url) };
+      return { title: site.host, url, favIconUrl: null, kind: 'Site', page: site.page, pageUrl: site.url, pick: () => openAddress(url) };
     });
   // A page shows once, whatever its fragment, and pages of one site with the
   // same title, such as a page reached with different parameters, once too.
@@ -231,7 +235,7 @@ async function dismiss() {
 }
 
 async function keepQuery() {
-  const text = query.value;
+  const text = typed;
   await chrome.storage.session.set({ overlayQuery: { text, tabId: target?.id, at: Date.now() } });
 }
 
@@ -331,7 +335,7 @@ function pinRows() {
 }
 
 function render() {
-  const text = query.value;
+  const text = typed;
   items = text.trim() ? results(text) : pinRows();
   selected = Math.min(selected, Math.max(items.length - 1, 0));
   resultsList.replaceChildren();
@@ -402,19 +406,70 @@ async function pick(index) {
 
 function move(step) {
   if (items.length === 0) return;
-  if (!query.value.trim() && !keyboardOnPins) {
+  if (!typed.trim() && !keyboardOnPins) {
     keyboardOnPins = true;
     selected = step > 0 ? 0 : items.length - 1;
   } else {
     selected = (selected + step + items.length) % items.length;
   }
+  uncomplete();
   render();
 }
 
-query.addEventListener('input', () => {
+// What the user typed; the field can hold more, the rest of an address the
+// overlay fills in and selects, as the address bar completes one.
+let typed = '';
+let completing = false;
+const hint = document.getElementById('hint');
+const measure = document.createElement('canvas').getContext('2d');
+
+// Fills in the rest of the top row's site after what was typed, selected so
+// the next key replaces it, with the site's icon and its most visited page's
+// title behind it.
+function complete() {
+  const top = items[0];
+  if (!completing || selected !== 0 || !top || top.kind !== 'Site' || !typed || /\s/.test(typed)
+    || !top.title.toLowerCase().startsWith(typed.toLowerCase()) || top.title.length === typed.length) {
+    uncomplete();
+    return;
+  }
+  query.value = typed + top.title.slice(typed.length);
+  query.setSelectionRange(typed.length, query.value.length, 'forward');
+  const style = getComputedStyle(query);
+  measure.font = `${style.fontSize} ${style.fontFamily}`;
+  hint.style.left = `${query.offsetLeft + measure.measureText(query.value).width + 14}px`;
+  hint.replaceChildren(iconImage(top.pageUrl, null), Object.assign(document.createElement('span'), { textContent: top.page || top.title }));
+  hint.hidden = false;
+}
+
+function uncomplete() {
+  hint.hidden = true;
+  if (query.value !== typed) {
+    query.value = typed;
+    query.setSelectionRange(typed.length, typed.length);
+  }
+}
+
+query.addEventListener('input', (event) => {
+  typed = query.value;
+  completing = event.inputType?.startsWith('insert') ?? true;
   selected = 0;
   keyboardOnPins = false;
   render();
+  complete();
+});
+
+// The filled-in rest becomes typed text with the arrow or End key.
+query.addEventListener('keydown', (event) => {
+  const filled = query.value !== typed && query.selectionEnd === query.value.length;
+  if (filled && (event.key === 'ArrowRight' || event.key === 'End')) {
+    event.preventDefault();
+    typed = query.value;
+    hint.hidden = true;
+    query.setSelectionRange(typed.length, typed.length);
+    selected = 0;
+    render();
+  }
 });
 
 document.addEventListener('keydown', (event) => {
@@ -430,7 +485,7 @@ document.addEventListener('keydown', (event) => {
     move(-1);
   } else if (key === 'Enter') {
     event.preventDefault();
-    if (query.value.trim() || keyboardOnPins) pick(selected);
+    if (typed.trim() || keyboardOnPins) pick(selected);
   }
 });
 
@@ -544,6 +599,7 @@ async function start() {
   const { overlayQuery } = await chrome.storage.session.get('overlayQuery');
   if (overlayQuery && overlayQuery.tabId === target.id && Date.now() - overlayQuery.at < KEEP_QUERY_MS) {
     query.value = overlayQuery.text;
+    typed = overlayQuery.text;
     query.select();
   }
   render();

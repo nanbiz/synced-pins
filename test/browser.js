@@ -204,7 +204,9 @@ class Context {
   // and the caller waits for what the shortcut does instead.
   async press(key, { ctrl = false, shift = false, wait = true } = {}) {
     const code = /^[0-9]$/.test(key) ? `Digit${key}` : /^[A-Z]$/i.test(key) ? `Key${key.toUpperCase()}` : key;
-    const keyCode = key === 'Enter' ? 13 : key.toUpperCase().charCodeAt(0);
+    // Keys the page's own editing acts on need their real key code.
+    const named = { Enter: 13, Backspace: 8, Escape: 27, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, End: 35 };
+    const keyCode = named[key] ?? key.toUpperCase().charCodeAt(0);
     const text = key === 'Enter' ? '\r' : undefined;
     for (const type of [text ? 'keyDown' : 'rawKeyDown', 'keyUp']) {
       const sent = this.connection.send('Input.dispatchKeyEvent', {

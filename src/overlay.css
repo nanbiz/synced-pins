@@ -65,6 +65,7 @@ body.tab #box {
 }
 
 #bar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -88,6 +89,43 @@ body.tab #box {
   color: inherit;
   font: inherit;
   font-size: 1.15em;
+}
+
+/* Behind an address the overlay fills in: that site's icon and title. */
+#hint {
+  position: absolute;
+  top: 50%;
+  right: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+#hint[hidden] {
+  display: none;
+}
+
+#hint img {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+#hint span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The filled-in rest of an address is held as a selection, so the next key
+   replaces it, and drawn as grey ghost text, as code editors suggest. */
+#query::selection {
+  background: transparent;
+  color: var(--muted);
 }
 
 #query::placeholder {
