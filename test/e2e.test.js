@@ -1257,7 +1257,8 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
         .find((tab) => (tab.pendingUrl || tab.url).includes('/src/overlay.html?mode=tab&newtab=1') && tab.status === 'complete')?.id, A);
       return created;
     });
-    assert.equal((await tabsIn(worker, A)).length, 2);
+    const afterNewTab = await tabsIn(worker, A);
+    assert.equal(afterNewTab.length, 2, JSON.stringify(afterNewTab.map((tab) => tab.url)));
     const page = await browser.page((url) => url.includes('/src/overlay.html?mode=tab&newtab=1'));
     await waitFor(() => page.run(() => document.activeElement?.id === 'query'));
     await page.press('Escape', { wait: false });
@@ -1338,7 +1339,8 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
       });
     }
     const overlay = await browser.page((url) => url.includes('/src/overlay.html?mode=tab&newtab=1'));
-    await waitFor(() => overlay.run(() => document.hasFocus() && document.activeElement?.id === 'query'));
+    await waitFor(() => overlay.run(() => document.hasFocus() && document.activeElement?.id === 'query'))
+      .catch(async (error) => assert.fail(`${error.message}\n${JSON.stringify(await tabsIn(worker, A))}`));
     assert.equal((await tabsIn(worker, A)).length, 2);
   });
 
@@ -1357,6 +1359,10 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
       const [before] = await tabsIn(worker, A);
       await focus(worker, A);
       await worker.run(async (windowId) => chrome.tabs.create({ windowId, url: 'chrome://newtab/' }), A);
+      await waitFor(async () => (await browser.targets()).some((info) => info.url.includes('/src/overlay.html')));
+      if (/vivaldi/i.test(executable ?? '') && !(await browser.targets()).some((info) => info.type === 'iframe' && info.url.includes('/src/overlay.html'))) {
+        throw new NoOverlayInPage('Vivaldi gives the extension no access to the page on the CI runner, so the overlay opened as a tab');
+      }
       const frame = await overlayFrame(browser);
       await waitFor(() => frame.run(() => document.activeElement?.id === 'query'));
       const tabs = await tabsIn(worker, A);
