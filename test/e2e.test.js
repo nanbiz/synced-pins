@@ -1001,25 +1001,34 @@ async function pressOverlayShortcut(browser, name) {
   await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, page.sessionId);
   for (let attempt = 1; ; attempt++) {
     await pressShortcut(page);
+    // Which overlay the press opened: over the page, or, where the shortcut
+    // was given no access to it, as the popup or a tab.
+    let kind;
     try {
-      await waitFor(() => overlayOpen(browser), { timeout: 8_000 });
-      const targets = await browser.targets();
-      const inPage = targets.some((info) => info.type === 'iframe' && info.url.includes('/src/overlay.html'));
-      const inTab = targets.some((info) => info.url.includes('/src/overlay.html?mode=tab'));
-      if (!inPage && inTab && /vivaldi/i.test(executable ?? '')) {
-        throw new NoOverlayInPage('Vivaldi gave the shortcut no access to the page, so the overlay opened as a tab');
-      }
-      // Now and then on the CI runners the shortcut grants no access to the
-      // page and the overlay falls back to the popup; that try counts as lost.
-      if (!inPage && attempt < SHORTCUT_TRIES && targets.some((info) => info.url.includes('/src/overlay.html?mode=popup'))) {
-        await current.browser.connection.send('Page.bringToFront', {}, page.sessionId);
-        continue;
-      }
-      return overlayFrame(browser);
+      kind = await waitFor(async () => {
+        const targets = await browser.targets();
+        if (targets.some((info) => info.type === 'iframe' && info.url.includes('/src/overlay.html'))) return 'page';
+        if (targets.some((info) => info.url.includes('/src/overlay.html?mode=tab'))) return 'tab';
+        if (targets.some((info) => info.url.includes('/src/overlay.html?mode=popup'))) return 'popup';
+        return null;
+      }, { timeout: 8_000 });
     } catch (error) {
       if (attempt === SHORTCUT_TRIES) throw error;
       await current.browser.connection.send('Page.bringToFront', {}, page.sessionId);
+      continue;
     }
+    if (kind === 'page') return overlayFrame(browser);
+    if (kind === 'tab' && /vivaldi/i.test(executable ?? '')) {
+      throw new NoOverlayInPage('Vivaldi gave the shortcut no access to the page, so the overlay opened as a tab');
+    }
+    // Now and then on the CI runners the shortcut grants no access to the
+    // page; the fallback goes again and that try counts as lost.
+    for (const info of (await browser.targets()).filter((target) => /\/src\/overlay\.html\?mode=(tab|popup)/.test(target.url))) {
+      await current.browser.connection.send('Target.closeTarget', { targetId: info.targetId }).catch(() => {});
+    }
+    await waitFor(async () => !(await overlayOpen(browser)));
+    if (attempt === SHORTCUT_TRIES) throw new Error(`the shortcut was given no access to the page in ${SHORTCUT_TRIES} tries; the overlay opened as the ${kind}`);
+    await current.browser.connection.send('Page.bringToFront', {}, page.sessionId);
   }
 }
 
@@ -1385,6 +1394,51 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     } finally {
       await rm(copy, { recursive: true, force: true });
     }
+  });
+
+  test('whether the browser\'s shortcuts page records Ctrl+T for the overlay', async () => {
+    const { worker, browser } = await open();
+    const tabId = await worker.run(async () => (await chrome.tabs.create({ url: 'chrome://extensions/shortcuts' })).id);
+    await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).status === 'complete', tabId));
+    const page = await browser.page((url) => /^[a-z]+:\/\/extensions\/shortcuts/.test(url));
+    await current.browser.connection.send('Page.bringToFront', {}, page.sessionId);
+    await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, page.sessionId);
+    const id = await worker.run(() => chrome.runtime.id);
+    // The page is built of nested shadow roots; the overlay's row is found by
+    // the command's description and its edit button clicked.
+    const clicked = await page.run((extensionId) => {
+      const all = (root) => [root, ...[...root.querySelectorAll('*')].flatMap((element) => (element.shadowRoot ? all(element.shadowRoot) : []))];
+      const roots = all(document);
+      const inputs = roots.flatMap((root) => [...root.querySelectorAll('cr-shortcut-input, extensions-shortcut-input')]);
+      const input = inputs.find((candidate) => (candidate.item?.id ?? candidate.extension ?? '') === extensionId && (candidate.commandName ?? candidate.command?.name) === 'open-overlay')
+        ?? inputs.find((candidate) => candidate.closest?.('.command-entry')?.textContent?.includes('Open a new tab'));
+      // Edge's page is plain inputs named after the command.
+      const plain = document.querySelector('input[aria-label^="Shortcut Open a new tab"]');
+      if (!input && plain) {
+        plain.click();
+        plain.focus();
+        return 'clicked';
+      }
+      if (!input) return `no input among ${inputs.length}`;
+      const edit = input.shadowRoot?.querySelector('#edit, cr-icon-button');
+      if (!edit) return 'no edit button';
+      edit.click();
+      return 'clicked';
+    }, id);
+    let recorded = 'not tried';
+    if (clicked === 'clicked') {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      try {
+        for (const type of ['rawKeyDown', 'keyUp']) {
+          await current.browser.connection.send('Input.dispatchKeyEvent', { type, key: 't', code: 'KeyT', modifiers: 2, windowsVirtualKeyCode: 84, nativeVirtualKeyCode: 84 }, page.sessionId);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        recorded = await worker.run(async () => (await chrome.commands.getAll()).find((command) => command.name === 'open-overlay')?.shortcut);
+      } catch (error) {
+        recorded = `the page took no keys: ${error.message}`;
+      }
+    }
+    console.log(`SHORTCUTS PAGE ${executable}: ${clicked}, overlay shortcut now ${JSON.stringify(recorded)}`);
   });
 
   test('installing opens the page that puts the overlay on Ctrl+T, once', async () => {
