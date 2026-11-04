@@ -515,7 +515,7 @@ for (const button of setup.querySelectorAll('button')) {
   button.addEventListener('mousedown', (event) => event.preventDefault());
 }
 document.getElementById('setup-open').addEventListener('click', async () => {
-  await chrome.tabs.create({ url: chrome.runtime.getURL('src/welcome.html'), windowId: target?.windowId });
+  await chrome.runtime.sendMessage({ type: 'openSetup', windowId: target?.windowId });
   close();
 });
 document.getElementById('setup-dismiss').addEventListener('click', async () => {

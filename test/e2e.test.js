@@ -1484,27 +1484,51 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     assert.equal(after.length, before, JSON.stringify(after.map((tab) => tab.url)));
   });
 
-  overlayTest('the overlay offers to go on Ctrl+T until dismissed, and its page shows the shortcut', async () => {
+  overlayTest('the overlay offers to go on Ctrl+T until dismissed, and its Set up opens the shortcuts page with the guide beside it', async () => {
     const { worker, browser } = await open();
     await createWindow(worker, 'A');
     const frame = await pressOverlayShortcut(browser, 'A');
     await waitFor(() => frame.run(() => !document.getElementById('setup').hidden));
-    await frame.run(() => document.getElementById('setup-open').click());
-    await waitFor(() => worker.run(async () => (await chrome.tabs.query({})).some((tab) => tab.url.includes('/src/welcome.html') && tab.status === 'complete')));
-    const page = await browser.page((url) => url.includes('/src/welcome.html'));
-    await waitFor(async () => (await page.run(() => document.getElementById('shortcut').textContent)) === 'Ctrl + Shift + Space');
-    assert.equal(await page.run(() => document.getElementById('ctrl-t').hidden), false);
-    await worker.run(async () => {
-      const tabs = await chrome.tabs.query({ url: chrome.runtime.getURL('src/welcome.html') });
-      await chrome.tabs.remove(tabs.map((tab) => tab.id));
-    });
+    await frame.run(() => document.getElementById('setup-dismiss').click());
+    await frame.press('Escape', { wait: false });
+    await waitFor(async () => !(await overlayOpen(browser)));
     const again = await pressOverlayShortcut(browser, 'A');
-    await waitFor(() => again.run(() => !document.getElementById('setup').hidden));
-    await again.run(() => document.getElementById('setup-dismiss').click());
+    await waitFor(() => again.run(() => document.getElementById('query') === document.activeElement));
+    assert.equal(await again.run(() => document.getElementById('setup').hidden), true);
     await again.press('Escape', { wait: false });
     await waitFor(async () => !(await overlayOpen(browser)));
+    await worker.run(() => chrome.storage.local.remove('setupDismissed'));
     const third = await pressOverlayShortcut(browser, 'A');
-    await waitFor(() => third.run(() => document.getElementById('query') === document.activeElement));
-    assert.equal(await third.run(() => document.getElementById('setup').hidden), true);
+    await waitFor(() => third.run(() => !document.getElementById('setup').hidden));
+    await third.run(() => document.getElementById('setup-open').click());
+    // The browser's shortcuts page opens in a window of its own, with the
+    // guide beside it.
+    let windows;
+    await waitFor(async () => {
+      windows = await worker.run(async () => (await chrome.windows.getAll({ populate: true })).map((window) => ({ id: window.id, type: window.type, urls: window.tabs.map((tab) => tab.pendingUrl || tab.url) })));
+      return windows.some((window) => window.urls.some((url) => /^[a-z]+:\/\/extensions\/shortcuts/.test(url)))
+        && windows.some((window) => window.urls.some((url) => url.includes('/src/welcome.html?guide')));
+    });
+    const shortcutsWindow = windows.find((window) => window.urls.some((url) => /extensions\/shortcuts/.test(url))).id;
+    await waitFor(() => worker.run(async () => (await chrome.tabs.query({})).some((tab) => tab.url.includes('/src/welcome.html?guide') && tab.status === 'complete')));
+    const guide = await browser.page((url) => url.includes('/src/welcome.html?guide'));
+    assert.deepEqual(await guide.run(() => ['page-steps', 'console-steps', 'worked'].map((id) => document.getElementById(id).hidden)), [false, true, true]);
+    // The browser that refuses Ctrl+T there gets the console steps, and its
+    // window the extensions page.
+    await guide.run(() => document.getElementById('refuses').click());
+    await waitFor(() => guide.run(() => !document.getElementById('console-steps').hidden));
+    await waitFor(() => worker.run(async (windowId) => (await chrome.tabs.query({ windowId })).some((tab) => /^[a-z]+:\/\/extensions\/?$/.test(tab.pendingUrl || tab.url)), shortcutsWindow));
+    // Once Ctrl+T is set, the guide says so and the other window goes.
+    await waitFor(() => worker.run(async (windowId) => (await chrome.tabs.query({ windowId }))[0]?.status === 'complete', shortcutsWindow));
+    const extensions = await browser.page((url) => /^[a-z]+:\/\/extensions\/?$/.test(url));
+    const id = await worker.run(() => chrome.runtime.id);
+    await extensions.run((extensionId) => new Promise((resolve) => chrome.developerPrivate.updateExtensionCommand(
+      { extensionId, commandName: 'open-overlay', keybinding: 'Ctrl+T' }, resolve)), id);
+    await waitFor(() => guide.run(() => !document.getElementById('worked').hidden));
+    await waitFor(async () => !(await worker.run(async (windowId) => chrome.windows.get(windowId).then(() => true, () => false), shortcutsWindow)));
+    await worker.run(async () => {
+      const tabs = await chrome.tabs.query({ url: chrome.runtime.getURL('src/welcome.html') + '*' });
+      await chrome.tabs.remove(tabs.map((tab) => tab.id));
+    });
   });
 });

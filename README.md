@@ -37,7 +37,9 @@ On pages a browser keeps extensions out of, such as its settings, the New Tab pa
 
 ### Putting it on Ctrl+T
 
-Browsers keep Ctrl+T for themselves: an extension cannot ask for it, and the shortcuts page at `chrome://extensions/shortcuts` cannot record it. It can still be set once by hand. While it is not set, the overlay shows **Set up** at its foot, which opens a page with a **Use Ctrl+T** button that copies the line below and opens `chrome://extensions`; there, press F12, open **Console**, paste and press Enter:
+An extension cannot ask for Ctrl+T, but you can give it the key once. While it is not set, the overlay shows **Set up** at its foot. It opens the browser's shortcuts page (`chrome://extensions/shortcuts`) in a window beside a short guide: click the pencil next to *Open a new tab* and press Ctrl+T. Chrome, Chromium, Brave and Helium take it there; Vivaldi keeps Ctrl+T for its own new tab, which becomes the overlay anyway.
+
+Where the shortcuts page does not take it, the guide's **The page won't take Ctrl+T** copies the line below and opens `chrome://extensions`; there, press F12, open **Console**, type `allow pasting` and press Enter, then paste and press Enter:
 
 ```js
 chrome.developerPrivate.updateExtensionCommand({ extensionId: 'ofcghgcepialnjkeghndofphhdaokdeg', commandName: 'open-overlay', keybinding: 'Ctrl+T' })

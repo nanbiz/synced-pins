@@ -29,6 +29,25 @@ function promptSetup() {
   return prompting;
 }
 
+// The guide to putting the overlay on Ctrl+T opens beside the browser's own
+// shortcuts page, both in the space of the window it was asked from: the page
+// on the left, the guide on the right, so its steps stay in view.
+async function openSetup(windowId) {
+  const from = await chrome.windows.get(windowId).catch(() => null);
+  const { left = 0, top = 0, width = 1280, height = 800 } = from ?? {};
+  const pageWidth = Math.round(width * 0.6);
+  const shortcuts = await chrome.windows.create({ url: 'chrome://extensions/shortcuts', left, top, width: pageWidth, height, focused: true });
+  await chrome.windows.create({
+    url: chrome.runtime.getURL(`src/welcome.html?guide&shortcuts=${shortcuts.id}`),
+    type: 'popup',
+    left: left + pageWidth,
+    top,
+    width: width - pageWidth,
+    height,
+  });
+  await chrome.windows.update(shortcuts.id, { focused: true });
+}
+
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   sync.note({ type: 'installed', reason });
   if (reason !== 'install') return;
@@ -40,6 +59,7 @@ chrome.windows.onCreated.addListener(() => promptSetup(), normalWindows);
 chrome.runtime.onStartup.addListener(layoutChanged);
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (message === 'summon' && sender.tab) sync.note({ type: 'summon', tabId: sender.tab.id, windowId: sender.tab.windowId });
+  if (message?.type === 'openSetup') openSetup(message.windowId);
   if (message?.type === 'overlayReady') overlayReady(message.tabId, message.frameStarted, message.ready);
   if (message?.type === 'closeTabs') {
     chrome.tabs.get(message.tabId).then((tab) => closeTabs(tab, { othersOnly: message.othersOnly === true })).catch(() => {});

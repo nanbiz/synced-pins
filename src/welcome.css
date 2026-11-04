@@ -103,16 +103,126 @@ button.quiet {
   font-size: 18px;
 }
 
-ol {
-  margin: -8px 0 0;
-  padding-left: 20px;
-  color: var(--muted);
-  line-height: 1.8;
-  font-size: 14px;
+/* The guide beside the shortcuts window: narrow, near the top. */
+body.guiding {
+  padding: 24px 16px;
 }
 
-ol kbd {
+h2 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 17px;
+}
+
+.steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  line-height: 1.5;
+}
+
+.steps li {
+  counter-increment: step;
+  display: flex;
+  gap: 12px;
+}
+
+.steps li::before {
+  content: counter(step);
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
   font-size: 12px;
+}
+
+.steps li.done {
+  color: var(--muted);
+}
+
+.steps li.done::before {
+  content: '✓';
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.steps kbd {
+  font-size: 12px;
+}
+
+.steps code {
+  font: 12px ui-monospace, monospace;
+  background: var(--page);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
+.pen {
+  width: 15px;
+  height: 15px;
+  vertical-align: -2px;
+}
+
+.steps-done {
+  margin: 0;
+  color: var(--muted);
+}
+
+.waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.waiting[hidden] {
+  display: none;
+}
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+button.link {
+  padding: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+button[hidden] {
+  display: none;
 }
 
 hr {
@@ -126,4 +236,8 @@ hr {
   height: 16px;
   vertical-align: -3px;
   margin-left: 4px;
+}
+
+[hidden] {
+  display: none !important;
 }

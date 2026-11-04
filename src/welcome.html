@@ -9,21 +9,16 @@
   <script type="module" src="welcome.js"></script>
 </head>
 <body>
-  <main>
+  <main id="welcome">
     <h1><img src="../icons/icon-48.png" alt="">Zen Essentials in Chrome</h1>
     <section class="row">
       <div class="what">
         <div class="name">New tab overlay</div>
         <span id="shortcut"></span>
       </div>
-      <button id="change" class="quiet" type="button">Change</button>
       <button id="ctrl-t" class="primary" type="button">Use Ctrl+T</button>
       <span id="done" class="ok" hidden>✓</span>
     </section>
-    <ol id="steps" hidden>
-      <li>In the extensions tab press <kbd>F12</kbd> and open <b>Console</b></li>
-      <li>Paste with <kbd>Ctrl</kbd> + <kbd>V</kbd> and press <kbd>Enter</kbd></li>
-    </ol>
     <hr>
     <section class="row">
       <div class="what">
@@ -31,6 +26,25 @@
         toolbar button <img class="button-icon" src="../icons/icon-16.png" alt="">
       </div>
     </section>
+  </main>
+  <main id="guide" hidden>
+    <h2>Open the overlay with <kbd>Ctrl</kbd>+<kbd>T</kbd> <span id="guide-done" class="ok" hidden>✓</span></h2>
+    <ol id="page-steps" class="steps">
+      <li><span>On the left, next to <b>Open a new tab</b>, click <img class="pen" src="pen.svg" alt="the pencil"></span></li>
+      <li><span>Press <kbd>Ctrl</kbd>+<kbd>T</kbd></span></li>
+    </ol>
+    <ol id="console-steps" class="steps" hidden>
+      <li class="done"><span>Line copied, extensions page opened on the left</span></li>
+      <li><span>Click into it, press <kbd>F12</kbd>, pick <b>Console</b></span></li>
+      <li><span>Type <code>allow pasting</code>, press <kbd>Enter</kbd></span></li>
+      <li><span>Paste with <kbd>Ctrl</kbd>+<kbd>V</kbd>, press <kbd>Enter</kbd></span></li>
+    </ol>
+    <p id="worked" class="steps-done" hidden>Ctrl+T now opens the overlay</p>
+    <div id="waiting" class="waiting"><span class="spinner"></span>Waiting for Ctrl+T…</div>
+    <div class="actions">
+      <button id="copy-again" class="link" type="button" hidden>Copy the line again</button>
+      <button id="refuses" class="link" type="button">The page won't take Ctrl+T</button>
+    </div>
   </main>
 </body>
 </html>
