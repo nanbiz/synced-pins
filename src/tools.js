@@ -65,7 +65,7 @@ function toggleInPage(path, query, openOnly = false) {
   }, 3000);
   frame.addEventListener('load', () => frame.focus());
   document.documentElement.append(frame);
-  return 'opened';
+  return { opened: Date.now(), readyState: document.readyState };
 }
 
 // When the overlay's shortcut last arrived, and how soon after it a New Tab
@@ -155,12 +155,42 @@ async function removeNewTab(tab) {
 // this extension's placeholders, as the toolbar button's popup. A browser
 // without extension popups on request, such as Vivaldi, gets it as a tab of
 // its own, the way a New Tab page opens.
+// The last overlays opened over a page, with how long each step took, kept
+// in local storage so a slow opening on a user's machine can be read back:
+// the key's arrival, the page running the code that adds the overlay (it
+// waits for the page's own work), and the overlay's bar ready in its frame.
+const TIMINGS = 20;
+const opening = new Map();
+
+async function noteTiming(timing) {
+  const { overlayTimings = [] } = await chrome.storage.local.get('overlayTimings');
+  await chrome.storage.local.set({ overlayTimings: [...overlayTimings, timing].slice(-TIMINGS) });
+}
+
+export function overlayReady(tabId, frameStarted, ready) {
+  const timing = opening.get(tabId);
+  if (!timing) return;
+  opening.delete(tabId);
+  noteTiming({ ...timing, frameStarted: Math.round(frameStarted - timing.key), ready: ready - timing.key });
+}
+
 export async function toggleOverlay(tab) {
   overlayCommandAt = Date.now();
   if (!tab || isOverlayTab(tab)) return;
   try {
     const query = new URLSearchParams({ mode: 'frame', tab: tab.id, window: tab.windowId }).toString();
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: toggleInPage, args: [overlayPath, query], injectImmediately: true });
+    const key = overlayCommandAt;
+    const [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: toggleInPage, args: [overlayPath, query], injectImmediately: true });
+    if (result?.opened) {
+      let site = '';
+      try {
+        site = new URL(tab.url).hostname;
+      } catch {
+        // No address to name.
+      }
+      opening.set(tab.id, { at: new Date(key).toISOString(), site, loading: tab.status === 'loading', readyState: result.readyState, pageRan: result.opened - key, injected: Date.now() - key, key });
+      setTimeout(() => opening.delete(tab.id), 10_000);
+    }
     return;
   } catch (error) {
     // The page cannot host it; the reason stays for the session, for finding

@@ -1063,6 +1063,13 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     const before = (await tabsIn(worker, A)).length;
     const frame = await pressOverlayShortcut(browser, 'A');
     assert.equal((await tabsIn(worker, A)).length, before);
+    // How long the opening took is kept, step by step.
+    let timing;
+    await waitFor(async () => {
+      [timing] = (await worker.run(() => chrome.storage.local.get('overlayTimings'))).overlayTimings ?? [];
+      return timing?.ready !== undefined;
+    });
+    assert.ok(['pageRan', 'injected', 'frameStarted', 'ready'].every((step) => Number.isFinite(timing[step])), JSON.stringify(timing));
     await frame.press('Escape', { wait: false });
     await waitFor(async () => !(await overlayOpen(browser)));
   });

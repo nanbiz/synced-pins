@@ -1,5 +1,5 @@
 import { createPinSync } from './pins.js';
-import { closeTabs, replaceNewTab, showClosableCount, toggleOverlay } from './tools.js';
+import { closeTabs, overlayReady, replaceNewTab, showClosableCount, toggleOverlay } from './tools.js';
 
 const sync = createPinSync(chrome);
 
@@ -40,6 +40,7 @@ chrome.windows.onCreated.addListener(() => promptSetup(), normalWindows);
 chrome.runtime.onStartup.addListener(layoutChanged);
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (message === 'summon' && sender.tab) sync.note({ type: 'summon', tabId: sender.tab.id, windowId: sender.tab.windowId });
+  if (message?.type === 'overlayReady') overlayReady(message.tabId, message.frameStarted, message.ready);
   if (message?.type === 'closeTabs') {
     chrome.tabs.get(message.tabId).then((tab) => closeTabs(tab, { othersOnly: message.othersOnly === true })).catch(() => {});
   }

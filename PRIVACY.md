@@ -6,6 +6,8 @@ To show your pinned tabs in every window, it reads the address, title and icon o
 
 While its new tab overlay is open, it reads the address, title and icon of your open tabs to suggest them as you type, and keeps none of them. Text you typed into the overlay and left without choosing anything stays in session storage for 45 seconds, so reopening the overlay over the same tab brings it back. The overlay is drawn over a page only after you press its shortcut there; it reads nothing from the page. The toolbar button counts and closes the tabs of its window and reads nothing else about them.
 
+For the last 20 times the overlay opened over a page, it keeps that page's site name and how long each step of the opening took, in local storage, so a slow opening can be looked into; none of it leaves the browser.
+
 If you allow it to open over any page, it draws the overlay over the page you were on when you open a new tab, and reads nothing from that page.
 
 If you allow it to read your history and bookmarks, from the row the overlay offers for it, the overlay searches them for what you type while it is open, in the browser, and keeps none of it.

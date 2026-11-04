@@ -604,7 +604,12 @@ async function start() {
   }
   render();
   query.focus();
-  if (mode === 'frame') requestAnimationFrame(() => window.parent.postMessage('synced-pins:ready', '*'));
+  if (mode === 'frame') {
+    requestAnimationFrame(() => {
+      window.parent.postMessage('synced-pins:ready', '*');
+      chrome.runtime.sendMessage({ type: 'overlayReady', tabId: target.id, frameStarted: performance.timeOrigin, ready: Date.now() }).catch(() => {});
+    });
+  }
 }
 
 start();
