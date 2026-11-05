@@ -87,6 +87,15 @@ async function start({ restoreSession = false, sandbox, extension = extensionPat
   }
 }
 
+// Vivaldi takes chrome.tabs.group without error and leaves the tab outside
+// any group; elsewhere a tab left ungrouped is a failure of the test.
+async function groupingIgnored(worker, tabId) {
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const ungrouped = await worker.run(async (id) => (await chrome.tabs.get(id)).groupId === -1, tabId);
+  if (ungrouped && !/vivaldi/i.test(executable ?? '')) assert.fail('the tab was not grouped');
+  return ungrouped;
+}
+
 // The page the extension opens once after installation, closed so the
 // windows hold only what a test opens.
 async function closeSetup(worker) {
@@ -441,13 +450,14 @@ describe('synced pins', { skip, concurrency: 1 }, () => {
     assert.equal(tab.index, 1);
   });
 
-  test('putting the live tab into a tab group lets the page go with it and keeps the pin', async () => {
+  test('putting the live tab into a tab group lets the page go with it and keeps the pin', async (context) => {
     const { worker } = await open();
     const { windows: [A, B, C], a } = await threeWindowsWithPins(worker);
     await worker.run((id, url) => chrome.tabs.update(id, { url }), a, pageUrl('a2'));
     await expectPinnedAreas(worker, [A, B, C], [['a2', 'b'], ['~a2', '~b'], ['~a2', '~b']]);
     await focus(worker, A);
     await worker.run((id) => chrome.tabs.group({ tabIds: [id] }), a);
+    if (await groupingIgnored(worker, a)) return context.skip('Vivaldi ignores tab groups made by an extension');
     await expectPinnedAreas(worker, [A, B, C], [['~a', 'b'], ['~a', '~b'], ['~a', '~b']]);
     const grouped = await worker.run((id) => chrome.tabs.get(id), a);
     assert.equal(grouped.windowId, A);
@@ -1131,12 +1141,13 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).pinned, tab.id));
   });
 
-  overlayTest('closing other tabs leaves pins and tab groups, and the button\'s second click gives up the selected tab for a pick in the overlay', async () => {
+  overlayTest('closing other tabs leaves pins and tab groups, and the button\'s second click gives up the selected tab for a pick in the overlay', async (context) => {
     const { worker, browser } = await open();
     const { windows: [A], a } = await threeWindowsWithPins(worker);
     await focus(worker, A);
     const grouped = await openTab(worker, A, 'grouped');
     await worker.run((id) => chrome.tabs.group({ tabIds: [id] }), grouped);
+    if (await groupingIgnored(worker, grouped)) return context.skip('Vivaldi ignores tab groups made by an extension');
     const loose = await openTab(worker, A, 'loose');
     const current = await openTab(worker, A, 'current', { active: true });
     await waitForTitle(worker, current, 'current');
