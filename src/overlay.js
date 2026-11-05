@@ -85,7 +85,10 @@ function indexed(entry) {
 }
 
 function keep(history, bookmarks) {
-  const web = (entry) => /^https?:/.test(entry.url ?? '');
+  // Sign-in steps are passed through, never gone back to, so they are left
+  // out of what the overlay offers.
+  const signIn = /\/(signin|ServiceLogin|challenge)\b|\/oauth2?\//i;
+  const web = (entry) => /^https?:/.test(entry.url ?? '') && !signIn.test(new URL(entry.url).pathname);
   remembered = {
     history: history.filter(web).map(indexed).sort((a, b) => b.weight - a.weight),
     bookmarks: bookmarks.filter(web).map(indexed),
@@ -316,11 +319,16 @@ function results(text) {
     ? [{ title: address, url: address, favIconUrl: null, kind: 'Open', pick: () => openAddress(address) }]
     : [searchItem];
   const { sites, pages } = recalled(text);
-  // Zen lists the actions a query names ahead of everything else.
+  // A visited site whose address starts with what is typed comes first, even
+  // where the text reads as an address of its own ("photos.go" is on its way
+  // to photos.google.com); otherwise a typed address opens as it is.
+  const typedLower = text.trim().toLowerCase();
+  const siteAhead = sites.some((site) => site.title.startsWith(typedLower) && site.title !== typedLower);
   return [
     ...actionItems(text),
-    ...(address ? [] : sites),
+    ...(!address || siteAhead ? sites : []),
     ...first,
+    ...(address && !siteAhead ? sites : []),
     ...pinItems(text),
     ...tabItems(text),
     ...pages,

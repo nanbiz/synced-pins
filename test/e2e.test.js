@@ -1315,6 +1315,24 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
       }));
       await frame.press('Backspace');
       assert.deepEqual(await frame.run(() => [document.getElementById('query').value, document.getElementById('hint').hidden]), ['127', true]);
+      await frame.press('Escape', { wait: false });
+      await waitFor(async () => !(await overlayOpen(browser)));
+      // Text that reads as an address of its own still gives way to a visited
+      // site it starts, and sign-in steps are not offered.
+      await worker.run(async () => {
+        await chrome.history.addUrl({ url: 'https://photos.example.com/' });
+        await chrome.history.addUrl({ url: 'https://photos.example.com/signin/challenge/pwd' });
+      });
+      const again = await pressOverlayShortcut(browser, 'A');
+      await typeInto(again, 'photos.ex');
+      await waitFor(async () => {
+        const [first] = await overlayResults(again);
+        return first?.title === 'photos.example.com' && first.kind === 'Site';
+      });
+      await waitFor(() => again.run(() => document.getElementById('query').value === 'photos.example.com'));
+      const rows = await overlayResults(again);
+      assert.equal(rows[1]?.kind, 'Open', JSON.stringify(rows));
+      assert.ok(!rows.some((row) => row.kind === 'History'), JSON.stringify(rows));
     } finally {
       await rm(copy, { recursive: true, force: true });
     }
