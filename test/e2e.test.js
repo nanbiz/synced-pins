@@ -57,7 +57,7 @@ const pageUrl = (name) => `${origin}/${name}`;
 // chrome.runtime.reload(). On restart the profile reopens its last session
 // when restoreSession is set and otherwise follows Chromium's default of
 // opening a New Tab page.
-async function start({ restoreSession = false, sandbox, extension = extensionPath, keepSetup = false } = {}) {
+async function start({ restoreSession = false, sandbox, extension = extensionPath, keepSetup = false, language } = {}) {
   const fresh = !sandbox;
   if (fresh) {
     sandbox = await createSandbox();
@@ -74,7 +74,7 @@ async function start({ restoreSession = false, sandbox, extension = extensionPat
   }
   let browser;
   try {
-    browser = await launchBrowser({ executable, sandbox, extensionPath: extension });
+    browser = await launchBrowser({ executable, sandbox, extensionPath: extension, language });
     const worker = extension === extensionPath
       ? await readyWorker(browser)
       : await browser.extensionWorker();
@@ -1511,6 +1511,32 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     const after = await tabsIn(worker, A);
     assert.equal(after.length, before, JSON.stringify(after.map((tab) => tab.url)));
+  });
+
+  overlayTest('a browser in German, where Ctrl+T reads Strg+T, offers no setup once the overlay is on it', async () => {
+    const { worker, browser } = await open({ language: 'de' });
+    const extensions = await worker.run(async () => (await chrome.tabs.create({ url: 'chrome://extensions' })).id);
+    await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).status === 'complete', extensions));
+    const page = await browser.page((url) => /^[a-z]+:\/\/extensions/.test(url));
+    const id = await worker.run(() => chrome.runtime.id);
+    await page.run((extensionId) => new Promise((resolve) => chrome.developerPrivate.updateExtensionCommand(
+      { extensionId, commandName: 'open-overlay', keybinding: 'Ctrl+T' }, resolve)), id);
+    await worker.run((tabId) => chrome.tabs.remove(tabId), extensions);
+    const shortcut = await waitFor(async () => {
+      const text = await worker.run(async () => (await chrome.commands.getAll()).find((c) => c.name === 'open-overlay').shortcut);
+      return /T$/.test(text) && text;
+    });
+    console.log(`# Ctrl+T reads ${shortcut}`);
+    assert.notEqual(shortcut, 'Ctrl+T', 'the browser did not take the German interface');
+    await worker.run(() => chrome.tabs.create({ url: chrome.runtime.getURL('src/overlay.html?mode=tab') }));
+    const overlay = await browser.page((url) => url.includes('/src/overlay.html?mode=tab'));
+    await waitFor(() => overlay.run(() => document.readyState === 'complete'));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(await overlay.run(() => document.getElementById('setup').hidden), true);
+    await worker.run(() => chrome.tabs.create({ url: chrome.runtime.getURL('src/welcome.html') }));
+    const welcome = await browser.page((url) => url.endsWith('/src/welcome.html'));
+    await waitFor(() => welcome.run(() => !document.getElementById('done').hidden));
+    assert.equal(await welcome.run(() => document.getElementById('ctrl-t').hidden), true);
   });
 
   overlayTest('the overlay offers to go on Ctrl+T until dismissed, and its Set up opens the shortcuts page with the guide beside it', async () => {

@@ -1,4 +1,5 @@
 import { createPinSync } from './pins.js';
+import { isCtrlT, overlayShortcut } from './shortcut.js';
 import { closeTabs, overlayReady, replaceNewTab, showClosableCount, toggleOverlay } from './tools.js';
 
 const sync = createPinSync(chrome);
@@ -14,11 +15,11 @@ const setupPage = chrome.runtime.getURL('src/welcome.html');
 async function promptSetupNow() {
   const { setupPending } = await chrome.storage.local.get('setupPending');
   if (!setupPending) return;
-  const command = (await chrome.commands.getAll()).find((candidate) => candidate.name === 'open-overlay');
+  const onCtrlT = isCtrlT(await overlayShortcut());
   const [window] = await chrome.windows.getAll(normalWindows);
-  if (command?.shortcut !== 'Ctrl+T' && !window) return;
+  if (!onCtrlT && !window) return;
   await chrome.storage.local.set({ setupPending: false });
-  if (command?.shortcut !== 'Ctrl+T') await chrome.tabs.create({ windowId: window.id, url: setupPage });
+  if (!onCtrlT) await chrome.tabs.create({ windowId: window.id, url: setupPage });
 }
 
 // One check at a time, so a window opening during the installation does not

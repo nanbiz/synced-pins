@@ -71,7 +71,9 @@ const loadOverDevTools = process.env.SYNCED_PINS_LOAD === 'cdp';
 
 // The browser runs headed, on the Xvfb display scripts/test-e2e.sh starts;
 // that script marks the environment so no other display is ever used.
-export async function launchBrowser({ executable, sandbox, extensionPath }) {
+// language names the browser's interface language ("de"), which Linux takes
+// from LANGUAGE and Windows from --lang.
+export async function launchBrowser({ executable, sandbox, extensionPath, language }) {
   if (!process.env.SYNCED_PINS_XVFB || !process.env.DISPLAY) {
     throw new Error('run the suite through scripts/test-e2e.sh, which gives the browser its own Xvfb display');
   }
@@ -88,8 +90,9 @@ export async function launchBrowser({ executable, sandbox, extensionPath }) {
       ? ['--enable-unsafe-extension-debugging']
       : [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`]),
     '--ozone-platform=x11',
+    ...(language ? [`--lang=${language}`] : []),
     'about:blank',
-  ], { env: browserEnv(sandbox), stdio: ['ignore', 'ignore', 'pipe'], detached: true });
+  ], { env: { ...browserEnv(sandbox), ...(language && { LANGUAGE: language }) }, stdio: ['ignore', 'ignore', 'pipe'], detached: true });
   const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
   const url = await devToolsUrl(child);
   const connection = await Connection.open(url);

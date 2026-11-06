@@ -1,5 +1,6 @@
 import { containsWords, matchScore } from './match.js';
 import { quickActions } from './quick-actions.js';
+import { isCtrlT, overlayShortcut } from './shortcut.js';
 
 // The overlay opened instead of a new tab: type an address, a search or the
 // name of an action, or pick one of the open tabs or pins, and only then does
@@ -511,12 +512,11 @@ const setup = document.getElementById('setup');
 
 // The row stays until the overlay is on Ctrl+T or the row is dismissed.
 async function offerSetup() {
-  const [commands, { setupDismissed }] = await Promise.all([
-    chrome.commands.getAll(),
+  const [shortcut, { setupDismissed }] = await Promise.all([
+    overlayShortcut(),
     chrome.storage.local.get('setupDismissed'),
   ]);
-  const command = commands.find((candidate) => candidate.name === 'open-overlay');
-  setup.hidden = setupDismissed || command?.shortcut === 'Ctrl+T';
+  setup.hidden = setupDismissed || isCtrlT(shortcut);
 }
 
 for (const button of setup.querySelectorAll('button')) {

@@ -1,3 +1,5 @@
+import { isCtrlT, overlayShortcut } from './shortcut.js';
+
 // The setup page. Opened once after installation it shows the overlay's
 // shortcut and offers to put it on Ctrl+T, which no extension may ask for.
 // As the guide (?guide) it sits beside a window with the browser's own
@@ -8,12 +10,6 @@ const params = new URLSearchParams(location.search);
 const guiding = params.has('guide');
 const shortcutsWindow = Number(params.get('shortcuts'));
 const command = `chrome.developerPrivate.updateExtensionCommand({ extensionId: '${chrome.runtime.id}', commandName: 'open-overlay', keybinding: 'Ctrl+T' })`;
-
-async function overlayShortcut() {
-  return (await chrome.commands.getAll()).find((entry) => entry.name === 'open-overlay')?.shortcut ?? '';
-}
-
-const isCtrlT = (shortcut) => shortcut.replace(/\s/g, '').toLowerCase() === 'ctrl+t';
 
 function keys(element, text) {
   const parts = text ? text.split('+') : [];
