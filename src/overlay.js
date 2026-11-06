@@ -592,7 +592,6 @@ async function start() {
   offerSetup();
   offerHistory();
   offerPages();
-  remember();
   const self = mode === 'tab' ? await chrome.tabs.getCurrent() : null;
   [tabs, { pins = [] }] = await Promise.all([
     chrome.tabs.query({ windowType: 'normal' }),
@@ -612,12 +611,16 @@ async function start() {
   }
   render();
   query.focus();
-  if (mode === 'frame') {
-    requestAnimationFrame(() => {
+  // History is read and indexed once the overlay shows, since thousands of
+  // pages hold up its first picture by tens of milliseconds; text typed
+  // before then gets its history rows when the index is ready.
+  requestAnimationFrame(() => {
+    if (mode === 'frame') {
       window.parent.postMessage('synced-pins:ready', '*');
       chrome.runtime.sendMessage({ type: 'overlayReady', tabId: target.id, frameStarted: performance.timeOrigin, ready: Date.now() }).catch(() => {});
-    });
-  }
+    }
+    setTimeout(remember);
+  });
 }
 
 start();
