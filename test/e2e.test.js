@@ -1529,12 +1529,22 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     console.log(`# Ctrl+T reads ${shortcut}`);
     assert.notEqual(shortcut, 'Ctrl+T', 'the browser did not take the German interface');
     await worker.run(() => chrome.tabs.create({ url: chrome.runtime.getURL('src/overlay.html?mode=tab') }));
+    // A page can be found before its document runs, so it is asked until it
+    // answers.
+    const loaded = (page) => waitFor(() => page.run(() => document.readyState === 'complete').catch(() => false));
     const overlay = await browser.page((url) => url.includes('/src/overlay.html?mode=tab'));
-    await waitFor(() => overlay.run(() => document.readyState === 'complete'));
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    assert.equal(await overlay.run(() => document.getElementById('setup').hidden), true);
+    await loaded(overlay);
+    // The overlay decides on the row from these two reads; the same reads
+    // asked after them answer after them, so the row is settled then.
+    const setupHidden = await overlay.run(async () => {
+      await Promise.all([chrome.commands.getAll(), chrome.storage.local.get('setupDismissed')]);
+      await new Promise((resolve) => setTimeout(resolve));
+      return document.getElementById('setup').hidden;
+    });
+    assert.equal(setupHidden, true);
     await worker.run(() => chrome.tabs.create({ url: chrome.runtime.getURL('src/welcome.html') }));
     const welcome = await browser.page((url) => url.endsWith('/src/welcome.html'));
+    await loaded(welcome);
     await waitFor(() => welcome.run(() => !document.getElementById('done').hidden));
     assert.equal(await welcome.run(() => document.getElementById('ctrl-t').hidden), true);
   });
