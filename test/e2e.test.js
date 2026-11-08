@@ -994,16 +994,16 @@ function overlayTest(name, fn) {
   });
 }
 
-async function pressOverlayShortcut(browser, name) {
+async function pressOverlayShortcut(browser, name, url = pageUrl(name)) {
   // The shortcut acts on the selected tab of the window focused last.
   // A page still loading replaces the document the overlay is drawn into.
-  await waitFor(() => current.worker.run(async (url) => (await chrome.tabs.query({ url })).some((tab) => tab.active && tab.status === 'complete'), pageUrl(name)));
-  const windowId = await current.worker.run(async (url) => (await chrome.tabs.query({ url })).find((tab) => tab.active)?.windowId, pageUrl(name));
+  await waitFor(() => current.worker.run(async (url) => (await chrome.tabs.query({ url })).some((tab) => tab.active && tab.status === 'complete'), url));
+  const windowId = await current.worker.run(async (url) => (await chrome.tabs.query({ url })).find((tab) => tab.active)?.windowId, url);
   if (windowId !== undefined) {
     await focus(current.worker, windowId);
     await waitFor(() => current.worker.run(async (id) => (await chrome.windows.getLastFocused()).id === id, windowId));
   }
-  const page = await browser.page(pageUrl(name));
+  const page = await browser.page(url);
   // The shortcut grants the extension the selected tab of the browser's
   // active window; without a window manager that need not be the window the
   // key goes to, so the page's window is made the active one.
@@ -1304,7 +1304,7 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     });
   });
 
-  test('a local file takes the browser\'s file access: without it the overlay offers the switch, with it the file opens and the overlay draws over it', async () => {
+  overlayTest('a local file takes the browser\'s file access: without it the overlay offers the switch, with it the file opens and the overlay draws over it', async () => {
     let { worker, browser } = await open();
     const A = await createWindow(worker, 'A');
     const local = (name) => join(current.sandbox.profile, `${name}.html`);
@@ -1351,14 +1351,7 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
       await chrome.tabs.update(tab.id, { active: true });
     }, A);
     await focus(worker, A);
-    const inPage = async () => (await browser.targets()).some((info) => info.type === 'iframe' && info.url.includes('/src/overlay.html'));
-    for (let attempt = 1; !(await inPage()); attempt++) {
-      await pressShortcut(file);
-      await waitFor(inPage, { timeout: 8_000 }).catch((error) => {
-        if (attempt === 3) throw error;
-      });
-    }
-    const frame = await overlayFrame(browser);
+    const frame = await pressOverlayShortcut(browser, 'report', `file://${local('report')}`);
     await typeInto(frame, `file://${local('other')}`);
     await waitFor(async () => (await overlayResults(frame))[0]?.kind === 'Open');
     assert.equal(await frame.run(() => document.getElementById('files').hidden), true);
