@@ -1076,6 +1076,53 @@ function tabsIn(worker, windowId) {
 }
 
 describe('overlay and closing button', { skip, concurrency: 1 }, () => {
+  overlayTest('letters typed between the shortcut and the overlay being ready go to its field, not to the page', async (context) => {
+    const { worker, browser } = await open();
+    const A = await createWindow(worker, 'A');
+    await waitFor(() => worker.run(async (url) => (await chrome.tabs.query({ url })).some((tab) => tab.active && tab.status === 'complete'), pageUrl('A')));
+    await focus(worker, A);
+    await waitFor(() => worker.run(async (id) => (await chrome.windows.getLastFocused()).id === id, A));
+    const page = await browser.page(pageUrl('A'));
+    await current.browser.connection.send('Page.bringToFront', {}, page.sessionId);
+    await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, page.sessionId);
+    // The page's own listener sits below the window, where a site's would.
+    await page.run(() => {
+      window.pageKeys = '';
+      document.addEventListener('keydown', (event) => { window.pageKeys += event.key; });
+    });
+    // The overlay's frame is held at its start, so the letters are typed
+    // while it is in the page but not yet ready, however fast the machine.
+    let paused;
+    const frameStarted = new Promise((resolve) => {
+      const stop = current.browser.connection.onEvent((message) => {
+        if (message.method !== 'Target.attachedToTarget' || message.sessionId !== page.sessionId) return;
+        // The frame's address is not known yet when it attaches; the page has
+        // no frame of its own.
+        if (message.params.targetInfo.type !== 'iframe') return;
+        paused = message.params.sessionId;
+        stop();
+        resolve();
+      });
+    });
+    await current.browser.connection.send('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, page.sessionId);
+    pressShortcut(page);
+    const started = await Promise.race([frameStarted.then(() => true), new Promise((resolve) => setTimeout(resolve, 8_000, false))]);
+    if (!started) return context.skip('the shortcut gave no access to the page this time');
+    const word = 'youtube';
+    for (const letter of word) {
+      for (const type of ['keyDown', 'keyUp']) {
+        await current.browser.connection.send('Input.dispatchKeyEvent', {
+          type, key: letter, code: `Key${letter.toUpperCase()}`, text: type === 'keyDown' ? letter : undefined,
+          windowsVirtualKeyCode: letter.toUpperCase().charCodeAt(0), nativeVirtualKeyCode: letter.toUpperCase().charCodeAt(0),
+        }, page.sessionId);
+      }
+    }
+    await current.browser.connection.send('Runtime.runIfWaitingForDebugger', {}, paused);
+    const frame = await overlayFrame(browser);
+    await waitFor(() => frame.run(() => document.getElementById('query').value.startsWith('youtube')));
+    assert.equal(await page.run(() => window.pageKeys), '');
+  });
+
   overlayTest('the shortcut opens the overlay over the page without a tab, and Escape closes it', async () => {
     const { worker, browser } = await open();
     const A = await createWindow(worker, 'A');

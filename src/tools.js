@@ -42,7 +42,33 @@ function toggleInPage(path, query, openOnly = false) {
     + 'margin:0;padding:0;background:rgb(0 0 0 / 0.45);backdrop-filter:blur(3px);color-scheme:light dark;'
     + 'z-index:2147483647;opacity:0';
   const focusedBefore = document.activeElement;
+  // Keys typed before the overlay has the keyboard are kept from the page and
+  // handed to the overlay once it is ready, so a fast word after the shortcut
+  // arrives whole.
+  let held = '';
+  const heldKeys = new Set();
+  const hold = (event) => {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+    if (event.key.length === 1) held += event.key;
+    else if (event.key === 'Backspace') held = held.slice(0, -1);
+    else return;
+    heldKeys.add(event.code);
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+  const holdUp = (event) => {
+    if (!heldKeys.delete(event.code)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+  const release = () => {
+    window.removeEventListener('keydown', hold, true);
+    window.removeEventListener('keyup', holdUp, true);
+  };
+  window.addEventListener('keydown', hold, true);
+  window.addEventListener('keyup', holdUp, true);
   const close = () => {
+    release();
     window.removeEventListener('message', onMessage);
     frame.remove();
     if (focusedBefore instanceof HTMLElement) focusedBefore.focus({ preventScroll: true });
@@ -51,7 +77,11 @@ function toggleInPage(path, query, openOnly = false) {
   // page and the bar appear together.
   function onMessage(event) {
     if (event.source !== frame.contentWindow) return;
-    if (event.data === 'synced-pins:ready') frame.style.opacity = '1';
+    if (event.data === 'synced-pins:ready') {
+      frame.style.opacity = '1';
+      release();
+      if (held) frame.contentWindow.postMessage({ syncedPinsTyped: held }, '*');
+    }
     if (event.data === 'synced-pins:hide') {
       frame.style.opacity = '0';
       requestAnimationFrame(() => requestAnimationFrame(() => frame.contentWindow?.postMessage('synced-pins:hidden', '*')));
@@ -176,7 +206,9 @@ export function overlayReady(tabId, frameStarted, ready) {
 
 export async function toggleOverlay(tab) {
   overlayCommandAt = Date.now();
-  if (!tab || isOverlayTab(tab)) return;
+  // A New Tab page being turned into the overlay gets it that way; no
+  // extension may draw on it, so the popup would open over that overlay too.
+  if (!tab || isOverlayTab(tab) || replacing.has(tab.id)) return;
   try {
     const query = new URLSearchParams({ mode: 'frame', tab: tab.id, window: tab.windowId }).toString();
     const key = overlayCommandAt;

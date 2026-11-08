@@ -459,7 +459,20 @@ function uncomplete() {
   }
 }
 
+// Keys typed over the page before the overlay had the keyboard come from the
+// page once the overlay is ready. They were typed before anything typed here,
+// so they go in front of it, or in place of a kept query still selected.
+let typedHere = false;
+window.addEventListener('message', (event) => {
+  if (event.source !== window.parent || typeof event.data?.syncedPinsTyped !== 'string') return;
+  const text = event.data.syncedPinsTyped;
+  if (typedHere) query.setRangeText(text, 0, 0, 'preserve');
+  else query.setRangeText(text, query.selectionStart, query.selectionEnd, 'end');
+  query.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: text }));
+});
+
 query.addEventListener('input', (event) => {
+  if (event.isTrusted) typedHere = true;
   typed = query.value;
   completing = event.inputType?.startsWith('insert') ?? true;
   selected = 0;
