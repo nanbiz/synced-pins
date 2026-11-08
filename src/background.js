@@ -30,6 +30,20 @@ function promptSetup() {
   return prompting;
 }
 
+// The browser reloads the extension when its file access is turned on, which
+// closes the setup page the user went there from, so the page comes back in
+// place of the tab holding the switch.
+async function returnToSetup() {
+  const { setupReturn } = await chrome.storage.local.get('setupReturn');
+  if (!setupReturn || !await chrome.extension.isAllowedFileSchemeAccess()) return;
+  await chrome.storage.local.remove('setupReturn');
+  const switchPage = new RegExp(`^[a-z]+://extensions/\\?id=${chrome.runtime.id}$`);
+  const tab = (await chrome.tabs.query({})).find((other) => switchPage.test(other.url));
+  await chrome.tabs.create({ windowId: tab?.windowId, url: setupPage });
+  if (tab) await chrome.tabs.remove(tab.id);
+}
+returnToSetup();
+
 // The guide to putting the overlay on Ctrl+T opens beside the browser's own
 // shortcuts page, both in the space of the window it was asked from: the page
 // on the left, the guide on the right, so its steps stay in view.

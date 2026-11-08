@@ -1653,6 +1653,43 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     assert.equal(after.length, before, JSON.stringify(after.map((tab) => tab.url)));
   });
 
+  test('the welcome page asks for pages, history and bookmarks in one dialog, leads to the file switch and marks what is set, with only the next step as the primary one', async () => {
+    let { worker, browser } = await open();
+    worker = await setFileAccess(browser, worker, false);
+    await worker.run(() => chrome.tabs.create({ url: chrome.runtime.getURL('src/welcome.html') }));
+    await waitFor(() => worker.run(async () => (await chrome.tabs.query({})).some((tab) => tab.url.endsWith('/src/welcome.html') && tab.status === 'complete')));
+    let welcome = await browser.page((url) => url.endsWith('/src/welcome.html'));
+    const state = (page) => page.run(() => Object.fromEntries(['full-allow', 'ctrl-t', 'files-allow'].map((id) => {
+      const button = document.getElementById(id);
+      return [id, button.hidden ? 'set' : button.classList.contains('primary') ? 'primary' : 'offered'];
+    })));
+    await waitFor(async () => (await state(welcome))['full-allow'] === 'primary');
+    assert.deepEqual(await state(welcome), { 'full-allow': 'primary', 'ctrl-t': 'offered', 'files-allow': 'offered' });
+    assert.equal(await welcome.run(() => document.getElementById('files-done').hidden), true);
+    // The browser's own dialog cannot be answered from a test, so what is
+    // asked of it is read instead.
+    const asked = await welcome.run(() => new Promise((resolve) => {
+      chrome.permissions.request = async (wanted) => {
+        resolve(wanted);
+        return false;
+      };
+      document.getElementById('full-allow').click();
+    }));
+    assert.deepEqual(asked, { permissions: ['history', 'bookmarks'], origins: ['<all_urls>'] });
+    const id = await worker.run(() => chrome.runtime.id);
+    await welcome.run(() => document.getElementById('files-allow').click());
+    await waitFor(() => worker.run(async (extension) => (await chrome.tabs.query({}))
+      .some((tab) => /^[a-z]+:\/\/extensions\/\?id=/.test(tab.pendingUrl || tab.url) && (tab.pendingUrl || tab.url).endsWith(extension)), id));
+    worker = await setFileAccess(browser, worker, true);
+    // The switch reloads the extension, which closes the page; it comes back
+    // in place of the tab holding the switch.
+    await waitFor(() => worker.run(async () => (await chrome.tabs.query({})).some((tab) => tab.url.endsWith('/src/welcome.html') && tab.status === 'complete')));
+    welcome = await browser.page((url) => url.endsWith('/src/welcome.html'));
+    await waitFor(async () => (await state(welcome))['files-allow'] === 'set');
+    assert.equal(await welcome.run(() => document.getElementById('files-done').hidden), false);
+    await waitFor(() => worker.run(async () => !(await chrome.tabs.query({})).some((tab) => /:\/\/extensions\/\?id=/.test(tab.url))));
+  });
+
   overlayTest('a browser in German, where Ctrl+T reads Strg+T, offers no setup once the overlay is on it', async (context) => {
     // Vivaldi on the CI runner reads Strg+T too, but the overlay tab this test
     // opens never answers there.

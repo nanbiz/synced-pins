@@ -97,6 +97,23 @@ button.quiet {
   color: var(--muted);
 }
 
+/* A step of the setup; the next one still to do carries the accent. */
+.row button {
+  background: var(--page);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.row button.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+.what code {
+  font: 13px ui-monospace, monospace;
+}
+
 .ok {
   color: var(--ok);
   font-weight: 600;

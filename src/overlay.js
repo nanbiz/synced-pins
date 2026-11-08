@@ -223,6 +223,8 @@ function close() {
 // with its tab, back to the tab selected before, as long as the window keeps
 // another tab.
 async function dismiss() {
+  // A key pressed while the overlay starts acts once it knows its own tab.
+  await started;
   await keepQuery();
   if (mode === 'tab' && (params.get('newtab') === '1' || params.get('closes') === '1') && target) {
     const others = (await chrome.tabs.query({ windowId: target.windowId })).filter((tab) => tab.id !== target.id);
@@ -673,4 +675,4 @@ async function start() {
   });
 }
 
-start();
+const started = start();
