@@ -27,8 +27,7 @@ body {
 }
 
 /* Over a page the overlay sits centred a little above the middle, as Zen's
-   address bar does; in the toolbar popup or a tab of its own it fills the
-   space it has. */
+   address bar does, and in a tab of its own at the same height. */
 body.frame {
   overflow: hidden;
   display: flex;
@@ -42,10 +41,6 @@ body.frame #box {
   border: 1px solid var(--line);
   border-radius: 15px;
   box-shadow: var(--shadow);
-}
-
-body.popup {
-  width: 560px;
 }
 
 body.tab {
@@ -203,8 +198,8 @@ body.tab #box {
   opacity: 1;
 }
 
-/* Rows at the overlay's foot offer what it can do once set up: Ctrl+T, and
-   history and bookmarks. */
+/* Rows at the overlay's foot offer what it can do once set up: local files,
+   drawing over pages, history and bookmarks, and Ctrl+T. */
 .offer {
   display: flex;
   align-items: center;

@@ -1012,14 +1012,13 @@ async function pressOverlayShortcut(browser, name) {
   for (let attempt = 1; ; attempt++) {
     await pressShortcut(page);
     // Which overlay the press opened: over the page, or, where the shortcut
-    // was given no access to it, as the popup or a tab.
+    // was given no access to it, as a tab.
     let kind;
     try {
       kind = await waitFor(async () => {
         const targets = await browser.targets();
         if (targets.some((info) => info.type === 'iframe' && info.url.includes('/src/overlay.html'))) return 'page';
         if (targets.some((info) => info.url.includes('/src/overlay.html?mode=tab'))) return 'tab';
-        if (targets.some((info) => info.url.includes('/src/overlay.html?mode=popup'))) return 'popup';
         return null;
       }, { timeout: 8_000 });
     } catch (error) {
@@ -1033,13 +1032,34 @@ async function pressOverlayShortcut(browser, name) {
     }
     // Now and then on the CI runners the shortcut grants no access to the
     // page; the fallback goes again and that try counts as lost.
-    for (const info of (await browser.targets()).filter((target) => /\/src\/overlay\.html\?mode=(tab|popup)/.test(target.url))) {
+    for (const info of (await browser.targets()).filter((target) => target.url.includes('/src/overlay.html?mode=tab'))) {
       await current.browser.connection.send('Target.closeTarget', { targetId: info.targetId }).catch(() => {});
     }
     await waitFor(async () => !(await overlayOpen(browser)));
     if (attempt === SHORTCUT_TRIES) throw new Error(`the shortcut was given no access to the page in ${SHORTCUT_TRIES} tries; the overlay opened as the ${kind}`);
     await current.browser.connection.send('Page.bringToFront', {}, page.sessionId);
   }
+}
+
+// Sets the browser's "Allow access to file URLs" for the extension, which
+// reloads it, and gives back its new worker.
+async function setFileAccess(browser, worker, fileAccess) {
+  const tab = await worker.run(async () => (await chrome.tabs.create({ url: 'chrome://extensions' })).id);
+  await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).status === 'complete', tab));
+  const page = await browser.page((url) => /^[a-z]+:\/\/extensions\/?$/.test(url));
+  const extensionId = await worker.run(() => chrome.runtime.id);
+  await page.run((id, allowed) => new Promise((resolve) => chrome.developerPrivate.updateExtensionConfiguration({ extensionId: id, fileAccess: allowed }, resolve)), extensionId, fileAccess);
+  const next = await waitFor(async () => {
+    try {
+      const candidate = await readyWorker(browser);
+      return await candidate.run(() => chrome.extension.isAllowedFileSchemeAccess()) === fileAccess && candidate;
+    } catch {
+      return false;
+    }
+  });
+  current.worker = next;
+  await next.run((id) => chrome.tabs.remove(id), tab);
+  return next;
 }
 
 // Clicks the toolbar button in the tab's window, the way its click reaches
@@ -1256,7 +1276,7 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     assert.equal((await tabsIn(worker, A)).length, 1);
   });
 
-  test('over a page the browser keeps to itself the overlay opens as the button\'s popup, or as a tab without popups', async () => {
+  test('over a page the browser keeps to itself the overlay opens as a tab beside it, which Escape closes', async () => {
     const { worker, browser } = await open();
     const B = await createWindow(worker, 'B');
     const [{ id }] = await tabsIn(worker, B);
@@ -1264,15 +1284,86 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     // Edge shows chrome://version as edge://version.
     const version = await browser.page((url) => /^[a-z]+:\/\/version/.test(url));
     await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, version.sessionId);
-    // Vivaldi opens no extension popup on request.
-    const mode = /vivaldi/i.test(executable ?? '') ? 'tab' : 'popup';
-    const shown = async () => (await browser.targets()).some((info) => info.url.includes(`/src/overlay.html?mode=${mode}`));
+    const shown = async () => (await browser.targets()).some((info) => info.url.includes('/src/overlay.html?mode=tab'));
     for (let attempt = 1; !(await shown()); attempt++) {
       await pressShortcut(version);
       await waitFor(shown, { timeout: 8_000 }).catch((error) => {
         if (attempt === 3) throw error;
       });
     }
+    // Vivaldi leaves a page that is attached to while it loads unanswered.
+    await waitFor(() => worker.run(async (windowId) => (await chrome.tabs.query({ windowId, active: true }))[0]?.status === 'complete', B));
+    const overlay = await browser.page((url) => url.includes('/src/overlay.html?mode=tab'));
+    await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, overlay.sessionId);
+    await waitFor(() => overlay.run(() => document.activeElement?.id === 'query'));
+    assert.equal(await overlay.run(() => document.getElementById('files').hidden), true);
+    await overlay.press('Escape', { wait: false });
+    await waitFor(async () => {
+      const tabs = await tabsIn(worker, B);
+      return tabs.length === 1 && tabs[0].id === id && tabs[0].active;
+    });
+  });
+
+  test('a local file takes the browser\'s file access: without it the overlay offers the switch, with it the file opens and the overlay draws over it', async () => {
+    let { worker, browser } = await open();
+    const A = await createWindow(worker, 'A');
+    const local = (name) => join(current.sandbox.profile, `${name}.html`);
+    await writeFile(local('report'), '<title>report</title>');
+    await writeFile(local('other'), '<title>other</title>');
+    const isOverlayTab = (url) => url.includes('/src/overlay.html?mode=tab');
+    // An extension installed from a store starts without it, one loaded from
+    // a folder with it.
+    worker = await setFileAccess(browser, worker, false);
+    const first = await browser.page(pageUrl('A'));
+    await current.browser.connection.send('Page.navigate', { url: `file://${local('report')}` }, first.sessionId);
+    await waitFor(() => worker.run(async (windowId) => {
+      const [tab] = await chrome.tabs.query({ windowId });
+      return tab.status === 'complete' && tab.url.startsWith('file:');
+    }, A));
+    const file = await browser.page((url) => url.startsWith('file:'));
+    await current.browser.connection.send('Page.bringToFront', {}, file.sessionId);
+    await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, file.sessionId);
+    await focus(worker, A);
+    const tabShown = async () => (await browser.targets()).some((info) => isOverlayTab(info.url));
+    for (let attempt = 1; !(await tabShown()); attempt++) {
+      await pressShortcut(file);
+      await waitFor(tabShown, { timeout: 8_000 }).catch((error) => {
+        if (attempt === 3) throw error;
+      });
+    }
+    await waitFor(() => worker.run(async (windowId) => (await chrome.tabs.query({ windowId, active: true }))[0]?.status === 'complete', A));
+    const overlay = await browser.page(isOverlayTab);
+    await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, overlay.sessionId);
+    await waitFor(() => overlay.run(() => document.activeElement?.id === 'query'));
+    await waitFor(() => overlay.run(() => !document.getElementById('files').hidden));
+    await typeInto(overlay, `file://${local('other')}`);
+    await waitFor(async () => (await overlayResults(overlay))[0]?.kind === 'Open');
+    await overlay.press('Enter', { wait: false });
+    // The browser would refuse the file, so Enter leads to the switch.
+    const id = await worker.run(() => chrome.runtime.id);
+    await waitFor(() => worker.run(async (windowId, extension) => (await chrome.tabs.query({ windowId }))
+      .some((tab) => /^[a-z]+:\/\/extensions\/\?id=/.test(tab.pendingUrl || tab.url) && (tab.pendingUrl || tab.url).endsWith(extension)), A, id));
+
+    worker = await setFileAccess(browser, worker, true);
+    await current.browser.connection.send('Page.bringToFront', {}, file.sessionId);
+    await worker.run(async (windowId) => {
+      const [tab] = (await chrome.tabs.query({ windowId })).filter((other) => other.url.startsWith('file:'));
+      await chrome.tabs.update(tab.id, { active: true });
+    }, A);
+    await focus(worker, A);
+    const inPage = async () => (await browser.targets()).some((info) => info.type === 'iframe' && info.url.includes('/src/overlay.html'));
+    for (let attempt = 1; !(await inPage()); attempt++) {
+      await pressShortcut(file);
+      await waitFor(inPage, { timeout: 8_000 }).catch((error) => {
+        if (attempt === 3) throw error;
+      });
+    }
+    const frame = await overlayFrame(browser);
+    await typeInto(frame, `file://${local('other')}`);
+    await waitFor(async () => (await overlayResults(frame))[0]?.kind === 'Open');
+    assert.equal(await frame.run(() => document.getElementById('files').hidden), true);
+    await frame.press('Enter', { wait: false });
+    await waitFor(() => worker.run(async (windowId) => (await chrome.tabs.query({ windowId })).some((tab) => tab.url.endsWith('/other.html') && tab.status === 'complete'), A));
   });
 
   test('the button\'s second click on a page the overlay cannot be drawn over leaves the overlay in its place', async () => {

@@ -33,7 +33,7 @@ Press **Ctrl+Shift+Space** and a search bar opens in the middle of the page inst
 - Type the name of an action, such as *pin tab*, *close tab*, *duplicate*, *reload*, *copy current url*, *next tab*, *private window*, *print* or *settings*, to run it on the tab under the overlay.
 - Escape or a click beside the bar closes it. Text you typed comes back if you open it again over the same tab within 45 seconds.
 
-On pages a browser keeps extensions out of, such as its settings, the New Tab page or the Web Store, the overlay opens below the toolbar button instead; Vivaldi, which opens no extension popups on request, gets it as a tab of its own.
+On pages a browser keeps extensions out of, such as its settings or the Web Store, the overlay opens as a tab of its own beside the page. Local files count as such pages, and cannot be opened from the overlay, until you click **Allow** on its *Open local files* row and turn on *Allow access to file URLs*.
 
 ### Putting it on Ctrl+T
 

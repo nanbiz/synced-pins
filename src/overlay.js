@@ -4,8 +4,7 @@ import { isCtrlT, overlayShortcut } from './shortcut.js';
 
 // The overlay opened instead of a new tab: type an address, a search or the
 // name of an action, or pick one of the open tabs or pins, and only then does
-// a tab open. It runs over a page (frame), as the toolbar button's popup
-// (popup), or as a tab of its own that the closing button leaves (tab).
+// a tab open. It runs over a page (frame) or as a tab of its own (tab).
 const params = new URLSearchParams(location.search);
 const mode = params.get('mode') ?? 'tab';
 // The tab the overlay was opened for is given up for whatever is picked: the
@@ -218,7 +217,6 @@ function addressOf(text) {
 
 function close() {
   if (mode === 'frame') window.parent.postMessage('synced-pins:close', '*');
-  else if (mode === 'popup') window.close();
 }
 
 // Leaving without a choice. The overlay that took a New Tab page's place goes
@@ -226,7 +224,7 @@ function close() {
 // another tab.
 async function dismiss() {
   await keepQuery();
-  if (mode === 'tab' && params.get('newtab') === '1' && target) {
+  if (mode === 'tab' && (params.get('newtab') === '1' || params.get('closes') === '1') && target) {
     const others = (await chrome.tabs.query({ windowId: target.windowId })).filter((tab) => tab.id !== target.id);
     if (others.length > 0) {
       const back = others.find((tab) => tab.id === Number(params.get('back')));
@@ -249,7 +247,10 @@ async function forgetQuery() {
 
 // A page picked loads in the tab being given up; elsewhere it opens in a new
 // tab, as Zen opens it.
-async function openAddress(url) {
+async function openAddress(address) {
+  // The browser refuses a local file without its file access, so the address
+  // leads to the page holding that switch.
+  const url = isFileAddress(address) && !filesAllowed ? filesPage : address;
   if (replacing) await chrome.tabs.update(target.id, { url });
   else await chrome.tabs.create({ windowId: target.windowId, url });
 }
@@ -345,6 +346,7 @@ function pinRows() {
 
 function render() {
   const text = typed;
+  showFilesOffer();
   items = text.trim() ? results(text) : pinRows();
   selected = Math.min(selected, Math.max(items.length - 1, 0));
   resultsList.replaceChildren();
@@ -521,6 +523,36 @@ document.addEventListener('mousedown', (event) => {
 
 window.addEventListener('focus', () => query.focus());
 
+function isFileAddress(text) {
+  return /^file:/i.test(text.trim());
+}
+
+const filesOffer = document.getElementById('files');
+const filesPage = `chrome://extensions/?id=${chrome.runtime.id}`;
+let filesAllowed = true;
+let filesDismissed = false;
+let onFilePage = false;
+
+// Offered while the browser keeps the extension from local files, over one or
+// with one typed, until the user turns that on or dismisses the row.
+function showFilesOffer() {
+  filesOffer.hidden = filesAllowed || filesDismissed || !(onFilePage || isFileAddress(typed));
+}
+
+for (const button of filesOffer.querySelectorAll('button')) {
+  button.addEventListener('mousedown', (event) => event.preventDefault());
+}
+document.getElementById('files-allow').addEventListener('click', async () => {
+  await openAddress(filesPage);
+  close();
+});
+document.getElementById('files-dismiss').addEventListener('click', async () => {
+  filesDismissed = true;
+  showFilesOffer();
+  query.focus();
+  await chrome.storage.local.set({ filesDismissed: true });
+});
+
 const setup = document.getElementById('setup');
 
 // The row stays until the overlay is on Ctrl+T or the row is dismissed.
@@ -606,10 +638,15 @@ async function start() {
   offerHistory();
   offerPages();
   const self = mode === 'tab' ? await chrome.tabs.getCurrent() : null;
-  [tabs, { pins = [] }] = await Promise.all([
+  let dismissals;
+  [tabs, { pins = [] }, filesAllowed, dismissals] = await Promise.all([
     chrome.tabs.query({ windowType: 'normal' }),
     chrome.storage.session.get('pins'),
+    chrome.extension.isAllowedFileSchemeAccess(),
+    chrome.storage.local.get('filesDismissed'),
   ]);
+  filesDismissed = dismissals.filesDismissed === true;
+  onFilePage = isFileAddress(tabs.find((tab) => tab.id === Number(params.get('back')))?.url ?? '');
   pins = pins.filter((pin) => pin.url);
   target = self ?? tabs.find((tab) => tab.id === Number(params.get('tab')));
   if (!target) {

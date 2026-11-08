@@ -11,12 +11,8 @@ function inGroup(tab) {
   return tab.groupId !== undefined && tab.groupId !== NO_TAB_GROUP;
 }
 
-function overlayPage(mode, tab) {
-  return `${overlayPath}?${new URLSearchParams({ mode, tab: tab.id, window: tab.windowId })}`;
-}
-
 function overlayUrl(mode, tab) {
-  return chrome.runtime.getURL(overlayPage(mode, tab));
+  return chrome.runtime.getURL(`${overlayPath}?${new URLSearchParams({ mode, tab: tab.id, window: tab.windowId })}`);
 }
 
 function isOverlayTab(tab) {
@@ -181,10 +177,9 @@ async function removeNewTab(tab) {
 }
 
 // The overlay opens in the page where the browser lets an extension draw
-// into it, and otherwise, as on the browser's own pages, the New Tab page or
-// this extension's placeholders, as the toolbar button's popup. A browser
-// without extension popups on request, such as Vivaldi, gets it as a tab of
-// its own, the way a New Tab page opens.
+// into it, and otherwise, as on the browser's own pages, local files without
+// the browser's file access or this extension's placeholders, as a tab of its
+// own beside the page, the way a New Tab page opens.
 // The last overlays opened over a page, with how long each step took, kept
 // in local storage so a slow opening on a user's machine can be read back:
 // the key's arrival, the page running the code that adds the overlay (it
@@ -207,7 +202,7 @@ export function overlayReady(tabId, frameStarted, ready) {
 export async function toggleOverlay(tab) {
   overlayCommandAt = Date.now();
   // A New Tab page being turned into the overlay gets it that way; no
-  // extension may draw on it, so the popup would open over that overlay too.
+  // extension may draw on it, so a second overlay would open beside that one.
   if (!tab || isOverlayTab(tab) || replacing.has(tab.id)) return;
   try {
     const query = new URLSearchParams({ mode: 'frame', tab: tab.id, window: tab.windowId }).toString();
@@ -240,21 +235,8 @@ export async function toggleOverlay(tab) {
       },
     });
   }
-  try {
-    await openOverlayPopup(tab);
-  } catch {
-    await chrome.tabs.create({ windowId: tab.windowId, index: tab.index + 1, active: true, url: overlayUrl('tab', tab) });
-  }
-}
-
-async function openOverlayPopup(tab) {
-  await chrome.action.setPopup({ popup: overlayPage('popup', tab) });
-  try {
-    await chrome.action.openPopup({ windowId: tab.windowId });
-  } finally {
-    // The button's own click closes tabs; the popup only opens on request.
-    await chrome.action.setPopup({ popup: '' });
-  }
+  const query = new URLSearchParams({ mode: 'tab', closes: '1', back: tab.id });
+  await chrome.tabs.create({ windowId: tab.windowId, index: tab.index + 1, active: true, url: chrome.runtime.getURL(`${overlayPath}?${query}`) });
 }
 
 // The tabs a click on the button closes in the window: every tab that is
