@@ -1359,6 +1359,39 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     await waitFor(() => worker.run(async (windowId) => (await chrome.tabs.query({ windowId })).some((tab) => tab.url.endsWith('/other.html') && tab.status === 'complete'), A));
   });
 
+  overlayTest('a path as a file manager gives it reads as a local file and opens', async () => {
+    const { worker, browser } = await open();
+    const A = await createWindow(worker, 'A');
+    const path = join(current.sandbox.profile, 'my#report.html');
+    await writeFile(path, '<title>report</title>');
+    const frame = await pressOverlayShortcut(browser, 'A');
+    const type = async (text) => {
+      await frame.run(() => { const input = document.getElementById('query'); input.value = ''; input.dispatchEvent(new Event('input')); });
+      await typeInto(frame, text);
+    };
+    const paths = [
+      ['C:/Users/me/Documents/a.html', 'file:///C:/Users/me/Documents/a.html'],
+      ['C:\\Users\\me\\My Documents\\a.html', 'file:///C:/Users/me/My%20Documents/a.html'],
+      ['"C:\\Users\\me\\a.html"', 'file:///C:/Users/me/a.html'],
+      ['z:\\Shared\\a.html', 'file:///z:/Shared/a.html'],
+      ['D:/a.html', 'file:///D:/a.html'],
+      ['\\\\server\\share\\a.html', 'file://server/share/a.html'],
+    ];
+    for (const [text, address] of paths) {
+      await type(text);
+      await waitFor(async () => {
+        const [first] = await overlayResults(frame);
+        return first?.kind === 'Open' && first.title === address;
+      });
+    }
+    await type('/r/rust memes');
+    await waitFor(async () => (await overlayResults(frame))[0]?.kind === 'Search');
+    await type(path);
+    await waitFor(async () => (await overlayResults(frame))[0]?.kind === 'Open');
+    await frame.press('Enter', { wait: false });
+    await waitFor(() => worker.run(async (windowId) => (await chrome.tabs.query({ windowId })).some((tab) => tab.url.endsWith('/my%23report.html') && tab.status === 'complete'), A));
+  });
+
   test('the button\'s second click on a page the overlay cannot be drawn over leaves the overlay in its place', async () => {
     const { worker, browser } = await open();
     const { windows: [, B] } = await threeWindowsWithPins(worker);

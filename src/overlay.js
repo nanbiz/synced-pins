@@ -203,11 +203,29 @@ function iconFor(url, favIconUrl) {
   return chrome.runtime.getURL(`/_favicon/?${new URLSearchParams({ pageUrl: url, size: 32 })}`);
 }
 
-// Turns typed text into an address where it reads as one: a scheme, or one
-// word with a dot, a port or localhost.
+// The file address of a path as a file manager or a title bar gives it, in the
+// quotes of Windows' Copy as path or without: on a drive, on a network share or,
+// outside Windows, from the root. A path from the root holds no spaces, since
+// text like "/r/rust memes" is a search. Every character of a path is literal,
+// so one like # or % is escaped.
+function fileAddressOf(value) {
+  const path = value.replace(/^"(.*)"$/, '$1');
+  const slashed = path.replaceAll('\\', '/');
+  const escaped = (text) => text.split('/').map(encodeURIComponent).join('/');
+  if (/^[a-z]:\//i.test(slashed)) return `file:///${slashed.slice(0, 2)}${escaped(slashed.slice(2))}`;
+  if (path.startsWith('\\\\')) return `file:${escaped(slashed)}`;
+  if (path.startsWith('/') && !/\s/.test(path) && !navigator.platform.startsWith('Win')) return `file://${escaped(path)}`;
+  return null;
+}
+
+// Turns typed text into an address where it reads as one: a path, a scheme, or
+// one word with a dot, a port or localhost.
 function addressOf(text) {
   const value = text.trim();
-  if (!value || /\s/.test(value)) return null;
+  if (!value) return null;
+  const file = fileAddressOf(value);
+  if (file) return file;
+  if (/\s/.test(value)) return null;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value) || /^(about|chrome|data|file|view-source):/i.test(value)) return value;
   const host = value.split(/[/?#]/)[0];
   if (/^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?$/i.test(host)) return `http://${value}`;
@@ -526,7 +544,7 @@ document.addEventListener('mousedown', (event) => {
 window.addEventListener('focus', () => query.focus());
 
 function isFileAddress(text) {
-  return /^file:/i.test(text.trim());
+  return /^file:/i.test(addressOf(text) ?? '');
 }
 
 const filesOffer = document.getElementById('files');
