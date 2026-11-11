@@ -117,8 +117,9 @@ body.tab #box {
 }
 
 /* The filled-in rest of an address is held as a selection, so the next key
-   replaces it, and drawn as grey ghost text, as code editors suggest. */
-#query::selection {
+   replaces it, and drawn as grey ghost text, as code editors suggest. Any
+   other selection shows as one. */
+#query.completing::selection {
   background: transparent;
   color: var(--muted);
 }

@@ -466,6 +466,7 @@ function complete() {
   }
   query.value = typed + top.title.slice(typed.length);
   query.setSelectionRange(typed.length, query.value.length, 'forward');
+  query.classList.add('completing');
   const style = getComputedStyle(query);
   measure.font = `${style.fontSize} ${style.fontFamily}`;
   hint.style.left = `${query.offsetLeft + measure.measureText(query.value).width + 14}px`;
@@ -475,6 +476,7 @@ function complete() {
 
 function uncomplete() {
   hint.hidden = true;
+  query.classList.remove('completing');
   if (query.value !== typed) {
     query.value = typed;
     query.setSelectionRange(typed.length, typed.length);
@@ -510,6 +512,7 @@ query.addEventListener('keydown', (event) => {
     event.preventDefault();
     typed = query.value;
     hint.hidden = true;
+    query.classList.remove('completing');
     query.setSelectionRange(typed.length, typed.length);
     selected = 0;
     render();

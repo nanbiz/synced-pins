@@ -27,6 +27,7 @@ function toggleInPage(path, query, openOnly = false) {
   const open = document.getElementById(id);
   if (open) {
     if (openOnly) return 'open';
+    navigator.keyboard?.unlock();
     open.remove();
     return 'closed';
   }
@@ -63,7 +64,13 @@ function toggleInPage(path, query, openOnly = false) {
   };
   window.addEventListener('keydown', hold, true);
   window.addEventListener('keyup', holdUp, true);
+  // Over a page in full screen the browser takes Escape to leave it before
+  // the page sees the key, so the overlay holds Escape while it is open: the
+  // first press closes the overlay, and holding Escape still leaves full
+  // screen.
+  if (document.fullscreenElement) navigator.keyboard?.lock(['Escape']).catch(() => {});
   const close = () => {
+    navigator.keyboard?.unlock();
     release();
     window.removeEventListener('message', onMessage);
     frame.remove();

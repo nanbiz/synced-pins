@@ -1459,6 +1459,43 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).active, before.id));
   });
 
+  overlayTest('text selected in the field shows as a selection, and only a filled-in address as grey text', async () => {
+    const { browser } = await open();
+    const { worker } = current;
+    await createWindow(worker, 'A');
+    const frame = await pressOverlayShortcut(browser, 'A');
+    await typeInto(frame, 'hello world');
+    const shown = () => frame.run(() => {
+      const query = document.getElementById('query');
+      query.select();
+      const muted = getComputedStyle(document.body).getPropertyValue('--muted').trim();
+      const probe = Object.assign(document.createElement('span'), { style: `color:${muted}` });
+      document.body.append(probe);
+      const grey = getComputedStyle(probe).color;
+      probe.remove();
+      return { color: getComputedStyle(query, '::selection').color, grey };
+    });
+    const { color, grey } = await shown();
+    assert.notEqual(color, grey);
+  });
+
+  overlayTest('over a page in full screen the first Escape closes the overlay and the page stays in full screen', async () => {
+    const { worker, browser } = await open();
+    await createWindow(worker, 'A');
+    await waitFor(() => worker.run(async (url) => (await chrome.tabs.query({ url })).some((tab) => tab.status === 'complete'), pageUrl('A')));
+    const page = await browser.page(pageUrl('A'));
+    await current.browser.connection.send('Runtime.evaluate', { expression: 'document.documentElement.requestFullscreen()', userGesture: true, awaitPromise: true }, page.sessionId);
+    await waitFor(() => page.run(() => document.fullscreenElement !== null));
+    const frame = await pressOverlayShortcut(browser, 'A');
+    await waitFor(() => frame.run(() => document.activeElement?.id === 'query'));
+    await frame.press('Escape');
+    await waitFor(async () => !(await overlayOpen(browser)));
+    assert.equal(await page.run(() => document.fullscreenElement !== null), true);
+    // With the overlay gone Escape is the browser's again.
+    await page.press('Escape');
+    await waitFor(() => page.run(() => document.fullscreenElement === null));
+  });
+
   overlayTest('with history allowed, a typed site comes first and visited pages after the tabs', async () => {
     // A copy that asks for history and bookmarks up front, which an unpacked
     // extension is granted without the dialog the overlay's Include opens.
