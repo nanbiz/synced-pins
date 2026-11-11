@@ -1487,9 +1487,14 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     await current.browser.connection.send('Runtime.evaluate', { expression: 'document.documentElement.requestFullscreen()', userGesture: true, awaitPromise: true }, page.sessionId);
     await waitFor(() => page.run(() => document.fullscreenElement !== null));
     const frame = await pressOverlayShortcut(browser, 'A');
+    const probe = (step) => page.run(async (step) => JSON.stringify({ step, lock: (await navigator.permissions.query({ name: 'keyboard-lock' }).catch((e) => ({ state: e.message }))).state, fullscreen: document.fullscreenElement !== null, overlay: document.getElementById('synced-pins-overlay')?.style.opacity ?? null, focus: document.hasFocus() }), step).then((line) => console.log('# PROBE', line), (e) => console.log('# PROBE', step, e.message));
+    await probe('opened');
     await waitFor(() => frame.run(() => document.activeElement?.id === 'query'));
     await waitFor(() => page.run(() => document.getElementById('synced-pins-overlay')?.style.opacity === '1'));
+    await probe('shown');
     await frame.press('Escape');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await probe('escaped');
     await waitFor(async () => !(await overlayOpen(browser)));
     assert.equal(await page.run(() => document.fullscreenElement !== null), true);
     // With the overlay gone Escape is the browser's again.
@@ -1601,6 +1606,92 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     assert.equal((await tabsIn(worker, A)).length, 2);
   });
 
+  // A copy that asks for every page up front, which an unpacked extension is
+  // granted without the dialog the welcome page's Allow opens.
+  async function withPagesAllowed(fn) {
+    const copy = await mkdtemp(join(tmpdir(), 'synced-pins-pages-'));
+    try {
+      await cp(extensionPath, copy, { recursive: true, filter: (path) => !/\/(node_modules|dist|\.git)(\/|$)/.test(path) });
+      const manifest = JSON.parse(await readFile(join(copy, 'manifest.json'), 'utf8'));
+      manifest.host_permissions = ['<all_urls>'];
+      delete manifest.optional_host_permissions;
+      await writeFile(join(copy, 'manifest.json'), JSON.stringify(manifest));
+      await fn(copy);
+    } finally {
+      await rm(copy, { recursive: true, force: true });
+    }
+  }
+
+  function pressAlt(page, type) {
+    return current.browser.connection.send('Input.dispatchKeyEvent', {
+      type, key: 'Alt', code: 'AltLeft', modifiers: type === 'keyUp' ? 0 : 1, windowsVirtualKeyCode: 18, nativeVirtualKeyCode: 18,
+    }, page.sessionId);
+  }
+
+  async function pressAltDigit(page, digit) {
+    for (const type of ['rawKeyDown', 'keyUp']) {
+      await current.browser.connection.send('Input.dispatchKeyEvent', {
+        type, key: digit, code: `Digit${digit}`, modifiers: 1, windowsVirtualKeyCode: 48 + Number(digit), nativeVirtualKeyCode: 48 + Number(digit),
+      }, page.sessionId);
+    }
+  }
+
+  const switcherShown = async (browser) => (await browser.targets()).find((info) => info.type === 'iframe' && info.url.includes('/src/switcher.html'));
+
+  test('holding Alt lists the window\'s tabs numbered as Alt with a digit selects them, and a digit selects its tab', async () => {
+    await withPagesAllowed(async (copy) => {
+      const { worker, browser } = await open({ extension: copy });
+      const A = await createWindow(worker, 'A');
+      const names = ['b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k'];
+      for (const name of names) await openTab(worker, A, name, { active: false });
+      await waitFor(() => worker.run(async (url) => (await chrome.tabs.query({ url })).some((tab) => tab.status === 'complete'), pageUrl('A')));
+      const page = await browser.page(pageUrl('A'));
+      await current.browser.connection.send('Page.bringToFront', {}, page.sessionId);
+      await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, page.sessionId);
+      await page.run(() => {
+        window.reachedPage = [];
+        window.addEventListener('keydown', (event) => window.reachedPage.push(event.key));
+      });
+      // The extension puts its script into the pages open when it starts.
+      const tabId = (await tabsIn(worker, A)).find((tab) => tab.active).id;
+      await waitFor(() => worker.run(async (tabId) => (await chrome.scripting.executeScript({ target: { tabId }, func: () => globalThis.syncedPinsSwitcher === true }))[0].result, tabId));
+      await pressAlt(page, 'rawKeyDown');
+      const target = await waitFor(() => switcherShown(browser));
+      const list = await browser.attach(target.targetId);
+      await waitFor(() => page.run(() => document.querySelector('iframe[src*="switcher.html"]')?.style.opacity === '1'));
+      const rows = await list.run(() => [...document.querySelectorAll('.row')].map((row) => row.querySelector('.number').textContent));
+      const order = (await tabsIn(worker, A)).sort((a, b) => a.index - b.index);
+      assert.equal(order.length, 11);
+      assert.deepEqual(rows, ['1', '2', '3', '4', '5', '6', '7', '8', '', '', '9']);
+      await pressAltDigit(page, '3');
+      await pressAlt(page, 'keyUp');
+      await waitFor(async () => (await tabsIn(worker, A)).find((tab) => tab.active)?.id === order[2].id);
+      await waitFor(async () => !(await switcherShown(browser)));
+      assert.deepEqual(await page.run(() => window.reachedPage.filter((key) => key !== 'Alt')), []);
+      await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).status === 'complete', order[2].id));
+      const third = await browser.page(order[2].pendingUrl || order[2].url);
+      await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, third.sessionId);
+      await pressAltDigit(third, '9');
+      await waitFor(async () => (await tabsIn(worker, A)).find((tab) => tab.active)?.id === order.at(-1).id);
+    });
+  });
+
+  test('Alt let go at once shows no tab list', async () => {
+    await withPagesAllowed(async (copy) => {
+      const { worker, browser } = await open({ extension: copy });
+      await createWindow(worker, 'A');
+      const page = await browser.page(pageUrl('A'));
+      await current.browser.connection.send('Emulation.setFocusEmulationEnabled', { enabled: true }, page.sessionId);
+      const tabId = (await worker.run(() => chrome.tabs.query({ active: true, lastFocusedWindow: true })))[0].id;
+      await waitFor(() => worker.run(async (tabId) => (await chrome.scripting.executeScript({ target: { tabId }, func: () => globalThis.syncedPinsSwitcher === true }))[0].result, tabId));
+      await pressAlt(page, 'rawKeyDown');
+      await pressAlt(page, 'keyUp');
+      // Longer than Alt is held before the list shows.
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      assert.equal(await switcherShown(browser), undefined);
+    });
+  });
+
   overlayTest('with pages allowed, a New Tab page goes and the overlay opens over the page before it', async () => {
     // A copy that asks for every page up front, which an unpacked extension
     // is granted without the dialog the overlay's Allow opens.
@@ -1615,6 +1706,8 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
       const A = await createWindow(worker, 'A');
       const [before] = await tabsIn(worker, A);
       await focus(worker, A);
+      // A page still loading replaces the document the overlay is drawn into.
+      await waitFor(() => worker.run(async (id) => (await chrome.tabs.get(id)).status === 'complete', before.id));
       await worker.run(async (windowId) => chrome.tabs.create({ windowId, url: 'chrome://newtab/' }), A);
       await waitFor(async () => (await browser.targets()).some((info) => info.url.includes('/src/overlay.html')));
       if (/vivaldi/i.test(executable ?? '') && !(await browser.targets()).some((info) => info.type === 'iframe' && info.url.includes('/src/overlay.html'))) {

@@ -1,0 +1,51 @@
+/* The numbered list of the window's tabs while Alt is held, drawn like the
+   overlay's results. The frame is wider and taller than the list by the room
+   its shadow takes. */
+body {
+  overflow: hidden;
+  padding: 0 64px;
+}
+
+#list {
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
+  scrollbar-width: none;
+  box-sizing: border-box;
+  padding: 6px 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.row {
+  height: 38px;
+  cursor: default;
+}
+
+.row .number {
+  flex: none;
+  width: 18px;
+  text-align: center;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.87em;
+}
+
+/* The tab the window is on, marked without the overlay's selection, since
+   nothing is picked until a digit is pressed. */
+.row.current {
+  background: var(--line);
+}
+
+/* The last tab has the 9, so it stays in sight where the list scrolls. */
+.row:last-child {
+  position: sticky;
+  bottom: -6px;
+  background: var(--surface);
+  box-shadow: 0 -1px 0 var(--line);
+}
+
+.row.current:last-child {
+  background: var(--line);
+}

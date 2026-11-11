@@ -1,6 +1,7 @@
 import { createPinSync } from './pins.js';
 import { isCtrlT, overlayShortcut } from './shortcut.js';
 import { closeTabs, overlayReady, replaceNewTab, showClosableCount, toggleOverlay } from './tools.js';
+import { keepSwitcher, switchTab, switcherTabs } from './tab-switcher.js';
 
 const sync = createPinSync(chrome);
 
@@ -18,8 +19,10 @@ async function promptSetupNow() {
   const onCtrlT = isCtrlT(await overlayShortcut());
   const [window] = await chrome.windows.getAll(normalWindows);
   if (!onCtrlT && !window) return;
-  await chrome.storage.local.set({ setupPending: false });
+  // Pending until the page is open, so whoever reads it as done finds the
+  // page there.
   if (!onCtrlT) await chrome.tabs.create({ windowId: window.id, url: setupPage });
+  await chrome.storage.local.set({ setupPending: false });
 }
 
 // One check at a time, so a window opening during the installation does not
@@ -72,7 +75,15 @@ chrome.runtime.onInstalled.addListener(async ({ reason }) => {
 });
 chrome.windows.onCreated.addListener(() => promptSetup(), normalWindows);
 chrome.runtime.onStartup.addListener(layoutChanged);
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.permissions.onAdded.addListener(() => keepSwitcher().catch(() => {}));
+chrome.permissions.onRemoved.addListener(() => keepSwitcher().catch(() => {}));
+keepSwitcher().catch(() => {});
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message?.type === 'switcherTabs' && sender.tab) {
+    switcherTabs(sender.tab.windowId).then(respond, () => respond([]));
+    return true;
+  }
+  if (message?.type === 'switchTab' && sender.tab) switchTab(sender.tab.windowId, message.number).catch(() => {});
   if (message === 'summon' && sender.tab) sync.note({ type: 'summon', tabId: sender.tab.id, windowId: sender.tab.windowId });
   if (message?.type === 'openSetup') openSetup(message.windowId);
   if (message?.type === 'overlayReady') overlayReady(message.tabId, message.frameStarted, message.ready);

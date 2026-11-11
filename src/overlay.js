@@ -521,6 +521,14 @@ query.addEventListener('keydown', (event) => {
 
 document.addEventListener('keydown', (event) => {
   const key = event.key;
+  // Alt with a digit selects a tab, as it does on the page under the overlay.
+  const digit = /^Digit([1-9])$/.exec(event.code);
+  if (digit && event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && !navigator.platform.startsWith('Mac')) {
+    event.preventDefault();
+    chrome.runtime.sendMessage({ type: 'switchTab', number: Number(digit[1]) }).catch(() => {});
+    close();
+    return;
+  }
   if (key === 'Escape') {
     event.preventDefault();
     dismiss();
