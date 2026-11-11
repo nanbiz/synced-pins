@@ -1488,6 +1488,7 @@ describe('overlay and closing button', { skip, concurrency: 1 }, () => {
     await waitFor(() => page.run(() => document.fullscreenElement !== null));
     const frame = await pressOverlayShortcut(browser, 'A');
     await waitFor(() => frame.run(() => document.activeElement?.id === 'query'));
+    await waitFor(() => page.run(() => document.getElementById('synced-pins-overlay')?.style.opacity === '1'));
     await frame.press('Escape');
     await waitFor(async () => !(await overlayOpen(browser)));
     assert.equal(await page.run(() => document.fullscreenElement !== null), true);

@@ -67,8 +67,13 @@ function toggleInPage(path, query, openOnly = false) {
   // Over a page in full screen the browser takes Escape to leave it before
   // the page sees the key, so the overlay holds Escape while it is open: the
   // first press closes the overlay, and holding Escape still leaves full
-  // screen.
-  if (document.fullscreenElement) navigator.keyboard?.lock(['Escape']).catch(() => {});
+  // screen. The overlay shows once the key is held, so an Escape pressed the
+  // moment it appears reaches it.
+  const escapeHeld = document.fullscreenElement && navigator.keyboard
+    ? navigator.keyboard.lock(['Escape']).then(() => {
+      if (!frame.isConnected) navigator.keyboard.unlock();
+    }, () => {})
+    : Promise.resolve();
   const close = () => {
     navigator.keyboard?.unlock();
     release();
@@ -81,9 +86,12 @@ function toggleInPage(path, query, openOnly = false) {
   function onMessage(event) {
     if (event.source !== frame.contentWindow) return;
     if (event.data === 'synced-pins:ready') {
-      frame.style.opacity = '1';
-      release();
-      if (held) frame.contentWindow.postMessage({ syncedPinsTyped: held }, '*');
+      escapeHeld.then(() => {
+        if (!frame.isConnected) return;
+        frame.style.opacity = '1';
+        release();
+        if (held) frame.contentWindow.postMessage({ syncedPinsTyped: held }, '*');
+      });
     }
     if (event.data === 'synced-pins:hide') {
       frame.style.opacity = '0';
